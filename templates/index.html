@@ -19,6 +19,9 @@
         .status-offline {
             background-color: #6b7280;
         }
+        .status-no-arduino {
+            background-color: #f59e0b;
+        }
         .slider-track {
             background: linear-gradient(to right, #dc2626, #fbbf24, #10b981);
         }
@@ -120,8 +123,8 @@
     <script>
         // ===== 全局變數 =====
         let pis = {};
-        let brightnessStates = {};
         let brightnessTimers = {};
+        let refreshing = false;
 
         // ===== 初始化 =====
         async function init() {
@@ -144,15 +147,21 @@
         }
 
         async function refreshStatus() {
+            if (refreshing) return; // 後端要逐台探測，慢的時候別讓請求越堆越多
+            refreshing = true;
             try {
                 const resp = await fetch('/api/pis');
                 const data = await resp.json();
                 if (data.status === 'success') {
+                    const changed = Object.keys(data.pis).join() !== Object.keys(pis).join();
                     pis = data.pis;
-                    updatePiStatus();
+                    // 裝置增減時要重畫，否則新卡片不會出現
+                    if (changed) renderPis(); else updatePiStatus();
                 }
             } catch (err) {
                 console.error('刷新狀態失敗', err);
+            } finally {
+                refreshing = false;
             }
         }
 
@@ -178,35 +187,33 @@
         }
 
         async function testPi(piId) {
-            try {
-                const button = document.querySelector(`#test-btn-${piId}`);
+            const button = document.querySelector(`[data-pi-id="${piId}"] .test-btn`);
+            if (button) {
                 button.disabled = true;
                 button.textContent = '⏳ 測試中...';
+            }
 
-                const resp = await fetch(`/api/pi/${piId}/test`, {
-                    method: 'POST'
-                });
+            try {
+                const resp = await fetch(`/api/pi/${piId}/test`, { method: 'POST' });
                 const data = await resp.json();
 
+                // 後端會回實際狀態，包含「Flask 通但 Arduino 沒接」
+                pis[piId].status = data.pi_status || 'offline';
+
                 if (data.status === 'success') {
-                    pis[piId].status = 'online';
                     showToast(`${pis[piId].name} 連接成功！`, 'success');
                 } else {
-                    pis[piId].status = 'offline';
-                    showToast(`${pis[piId].name} 連接失敗`, 'error');
+                    showToast(`${pis[piId].name} 連接失敗: ${data.error || '未知錯誤'}`, 'error');
                 }
-                
-                updatePiCard(piId);
-                button.disabled = false;
-                button.textContent = '✓ 測試連接';
             } catch (err) {
                 pis[piId].status = 'offline';
-                updatePiCard(piId);
                 showToast(`測試失敗: ${err.message}`, 'error');
-                
-                const button = document.querySelector(`#test-btn-${piId}`);
-                button.disabled = false;
-                button.textContent = '✓ 測試連接';
+            } finally {
+                updatePiCard(piId);
+                if (button) {
+                    button.disabled = false;
+                    button.textContent = '✓ 測試連接';
+                }
             }
         }
 
@@ -311,20 +318,26 @@
             document.getElementById('pi-count').textContent = Object.keys(pis).length;
         }
 
+        // 三種狀態：online / no-arduino (Flask 活著但 Arduino 斷線) / offline
+        function statusInfo(status) {
+            if (status === 'online') return { cls: 'status-online', text: '🟢 連接中' };
+            if (status === 'no-arduino') return { cls: 'status-no-arduino', text: '🟡 Arduino 未接' };
+            return { cls: 'status-offline', text: '🔴 離線' };
+        }
+
         function createPiCard(piId, piData) {
-            const statusClass = piData.status === 'online' ? 'status-online' : 'status-offline';
-            const statusText = piData.status === 'online' ? '🟢 連接中' : '🔴 離線';
+            const { cls, text } = statusInfo(piData.status);
 
             return `
-                <div class="pi-card bg-slate-800 rounded-lg p-6 border border-slate-700">
+                <div class="pi-card bg-slate-800 rounded-lg p-6 border border-slate-700" data-pi-id="${piId}">
                     <!-- 標題欄 -->
                     <div class="flex justify-between items-start mb-4">
                         <div>
                             <h3 class="text-lg font-bold text-cyan-400">${piData.name}</h3>
                             <p class="text-xs text-gray-500">${piId} • ${piData.host}:${piData.port}</p>
                         </div>
-                        <span class="px-3 py-1 rounded-full text-xs font-semibold ${statusClass}">
-                            ${statusText}
+                        <span class="status-indicator px-3 py-1 rounded-full text-xs font-semibold ${cls}">
+                            ${text}
                         </span>
                     </div>
 
@@ -356,7 +369,7 @@
 
                     <!-- 管理按鈕 -->
                     <div class="grid grid-cols-2 gap-2">
-                        <button id="test-btn-${piId}" onclick="testPi('${piId}')" class="py-2 px-3 bg-blue-600 hover:bg-blue-500 text-xs font-semibold rounded transition">
+                        <button onclick="testPi('${piId}')" class="test-btn py-2 px-3 bg-blue-600 hover:bg-blue-500 text-xs font-semibold rounded transition">
                             ✓ 測試連接
                         </button>
                         <button onclick="deletePi('${piId}')" class="py-2 px-3 bg-gray-600 hover:bg-gray-500 text-xs font-semibold rounded transition">
@@ -375,13 +388,15 @@
 
         function updatePiCard(piId) {
             const piData = pis[piId];
+            if (!piData) return;
+
             const statusElement = document.querySelector(`[data-pi-id="${piId}"] .status-indicator`);
-            
-            if (statusElement) {
-                const statusClass = piData.status === 'online' ? 'status-online' : 'status-offline';
-                statusElement.className = `px-3 py-1 rounded-full text-xs font-semibold ${statusClass}`;
-                statusElement.textContent = piData.status === 'online' ? '🟢 連接中' : '🔴 離線';
-            }
+            if (!statusElement) return;
+
+            const { cls, text } = statusInfo(piData.status);
+            // 保留 status-indicator，否則下次就選不到這個元素了
+            statusElement.className = `status-indicator px-3 py-1 rounded-full text-xs font-semibold ${cls}`;
+            statusElement.textContent = text;
         }
 
         function updateSlider(piId) {

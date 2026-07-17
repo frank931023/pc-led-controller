@@ -1,0 +1,13 @@
+# Dockerfile 用的是 COPY . .，這裡列的東西不會被打包進 image
+
+# 設定與執行期資料都必須留在 image 外面
+.env
+data/
+
+.git
+.gitignore
+README.md
+__pycache__/
+*.py[cod]
+venv/
+.venv/

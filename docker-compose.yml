@@ -1,13 +1,19 @@
-version: '3.8'
-
 services:
   led-controller:
     build: .
     container_name: pc-led-controller
-    ports:
-      - "5001:5001"
     restart: unless-stopped
+
+    ports:
+      - "${HOST_PORT:-5001}:5001"
+
+    # 掛載整個 data 目錄，而不是單一檔案：bind-mount 一個不存在的檔案時，
+    # Docker 會建出同名「目錄」，讓 app 的存檔靜默失敗。
     volumes:
-      - ./pi_config.json:/app/pi_config.json
+      - ./data:/app/data
+
+    # 設定放在 .env（見 .env.example），不進版控
     environment:
-      - FLASK_ENV=production
+      - CONFIG_FILE=${CONFIG_FILE:-/app/data/pi_config.json}
+      # 正式環境務必保持 0：debug 會把 Werkzeug debugger 開放到區域網路
+      - FLASK_DEBUG=${FLASK_DEBUG:-0}

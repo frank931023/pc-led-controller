@@ -1,0 +1,10 @@
+# 本機設定，不進版控（範本見 .env.example）
+.env
+
+# 裝置清單是執行期資料，每台機器不同
+data/
+
+__pycache__/
+*.py[cod]
+venv/
+.venv/
