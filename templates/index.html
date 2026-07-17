@@ -1,0 +1,437 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LED 控制中心</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        .pi-card {
+            transition: all 0.3s ease;
+        }
+        .pi-card:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 25px rgba(0, 0, 0, 0.2);
+        }
+        .status-online {
+            background-color: #10b981;
+        }
+        .status-offline {
+            background-color: #6b7280;
+        }
+        .slider-track {
+            background: linear-gradient(to right, #dc2626, #fbbf24, #10b981);
+        }
+    </style>
+</head>
+<body class="bg-gradient-to-br from-slate-950 via-slate-900 to-slate-800 text-white min-h-screen">
+    <div class="container mx-auto px-4 py-8">
+        <!-- 標題 -->
+        <div class="text-center mb-12">
+            <h1 class="text-4xl font-bold mb-2 bg-gradient-to-r from-cyan-400 to-blue-500 bg-clip-text text-transparent">
+                💡 LED 控制中心
+            </h1>
+            <p class="text-gray-400">管理和控制多台樹梅派上的 Arduino 燈號</p>
+        </div>
+
+        <!-- 系統狀態欄 -->
+        <div class="mb-8 bg-slate-800 rounded-lg p-6 border border-slate-700">
+            <div class="flex justify-between items-center">
+                <div>
+                    <span class="text-gray-400 text-sm">連接的裝置</span>
+                    <div class="text-3xl font-bold text-cyan-400" id="pi-count">0</div>
+                </div>
+                <div class="flex gap-3">
+                    <button onclick="refreshStatus()" class="px-4 py-2 bg-cyan-600 hover:bg-cyan-500 rounded-lg text-sm font-semibold transition">
+                        🔄 刷新狀態
+                    </button>
+                    <button onclick="showAddPiModal()" class="px-4 py-2 bg-green-600 hover:bg-green-500 rounded-lg text-sm font-semibold transition">
+                        ➕ 新增裝置
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Pi 卡片容器 -->
+        <div id="pi-container" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 mb-8">
+            <!-- 動態生成的 Pi 卡片 -->
+        </div>
+
+        <!-- 空狀態提示 -->
+        <div id="empty-state" class="text-center py-20 text-gray-400">
+            <p class="text-lg mb-4">還沒有連接的裝置</p>
+            <button onclick="showAddPiModal()" class="px-6 py-2 bg-green-600 hover:bg-green-500 rounded-lg font-semibold transition">
+                新增第一台裝置
+            </button>
+        </div>
+
+        <!-- 全局控制 -->
+        <div id="global-controls" class="hidden mt-12 bg-slate-800 rounded-lg p-6 border border-slate-700">
+            <h2 class="text-xl font-bold mb-4">全局控制</h2>
+            <div class="grid grid-cols-2 gap-4">
+                <button onclick="setAllBrightness(0)" class="py-3 bg-red-600 hover:bg-red-500 font-semibold rounded-lg transition">
+                    🔴 全部關閉
+                </button>
+                <button onclick="setAllBrightness(255)" class="py-3 bg-green-600 hover:bg-green-500 font-semibold rounded-lg transition">
+                    🟢 全部開啟
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 新增 Pi 的 Modal -->
+    <div id="add-pi-modal" class="hidden fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+        <div class="bg-slate-800 rounded-lg p-8 max-w-md w-full mx-4 border border-slate-700">
+            <h2 class="text-2xl font-bold mb-6">新增裝置</h2>
+            
+            <div class="space-y-4 mb-6">
+                <div>
+                    <label class="block text-sm text-gray-400 mb-1">裝置 ID</label>
+                    <input id="new-pi-id" type="text" placeholder="例：pi-003" class="w-full px-4 py-2 bg-slate-700 rounded border border-slate-600 text-white placeholder-gray-500">
+                </div>
+                <div>
+                    <label class="block text-sm text-gray-400 mb-1">主機名稱或 IP</label>
+                    <input id="new-pi-host" type="text" placeholder="例：192.168.1.102 或 raspberrypi.local" class="w-full px-4 py-2 bg-slate-700 rounded border border-slate-600 text-white placeholder-gray-500">
+                </div>
+                <div>
+                    <label class="block text-sm text-gray-400 mb-1">連接埠</label>
+                    <input id="new-pi-port" type="number" value="5000" class="w-full px-4 py-2 bg-slate-700 rounded border border-slate-600 text-white">
+                </div>
+                <div>
+                    <label class="block text-sm text-gray-400 mb-1">顯示名稱</label>
+                    <input id="new-pi-name" type="text" placeholder="例：樓下客廳" class="w-full px-4 py-2 bg-slate-700 rounded border border-slate-600 text-white placeholder-gray-500">
+                </div>
+            </div>
+
+            <div class="flex gap-3">
+                <button onclick="addNewPi()" class="flex-1 py-2 bg-green-600 hover:bg-green-500 font-semibold rounded transition">
+                    新增
+                </button>
+                <button onclick="closeAddPiModal()" class="flex-1 py-2 bg-gray-600 hover:bg-gray-500 font-semibold rounded transition">
+                    取消
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 訊息通知 -->
+    <div id="toast-container" class="fixed bottom-6 right-6 space-y-2 z-40"></div>
+
+    <script>
+        // ===== 全局變數 =====
+        let pis = {};
+        let brightnessStates = {};
+        let brightnessTimers = {};
+
+        // ===== 初始化 =====
+        async function init() {
+            await loadPis();
+            setInterval(refreshStatus, 5000); // 每 5 秒刷新狀態
+        }
+
+        // ===== API 函數 =====
+        async function loadPis() {
+            try {
+                const resp = await fetch('/api/pis');
+                const data = await resp.json();
+                if (data.status === 'success') {
+                    pis = data.pis;
+                    renderPis();
+                }
+            } catch (err) {
+                showToast('載入裝置列表失敗', 'error');
+            }
+        }
+
+        async function refreshStatus() {
+            try {
+                const resp = await fetch('/api/pis');
+                const data = await resp.json();
+                if (data.status === 'success') {
+                    pis = data.pis;
+                    updatePiStatus();
+                }
+            } catch (err) {
+                console.error('刷新狀態失敗', err);
+            }
+        }
+
+        async function setBrightness(piId, brightness) {
+            try {
+                const resp = await fetch(`/api/pi/${piId}/brightness`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ brightness: brightness })
+                });
+                const data = await resp.json();
+                
+                if (data.status === 'success') {
+                    pis[piId].brightness = brightness;
+                    updateSlider(piId);
+                    showToast(`${pis[piId].name} 亮度已設定為 ${brightness}`, 'success');
+                } else {
+                    showToast(`設定失敗: ${data.error}`, 'error');
+                }
+            } catch (err) {
+                showToast('設定亮度失敗', 'error');
+            }
+        }
+
+        async function testPi(piId) {
+            try {
+                const button = document.querySelector(`#test-btn-${piId}`);
+                button.disabled = true;
+                button.textContent = '⏳ 測試中...';
+
+                const resp = await fetch(`/api/pi/${piId}/test`, {
+                    method: 'POST'
+                });
+                const data = await resp.json();
+
+                if (data.status === 'success') {
+                    pis[piId].status = 'online';
+                    showToast(`${pis[piId].name} 連接成功！`, 'success');
+                } else {
+                    pis[piId].status = 'offline';
+                    showToast(`${pis[piId].name} 連接失敗`, 'error');
+                }
+                
+                updatePiCard(piId);
+                button.disabled = false;
+                button.textContent = '✓ 測試連接';
+            } catch (err) {
+                pis[piId].status = 'offline';
+                updatePiCard(piId);
+                showToast(`測試失敗: ${err.message}`, 'error');
+                
+                const button = document.querySelector(`#test-btn-${piId}`);
+                button.disabled = false;
+                button.textContent = '✓ 測試連接';
+            }
+        }
+
+        async function deletePi(piId) {
+            if (confirm(`確定要移除 "${pis[piId].name}" 嗎？`)) {
+                try {
+                    const resp = await fetch(`/api/pi/${piId}`, {
+                        method: 'DELETE'
+                    });
+                    const data = await resp.json();
+                    
+                    if (data.status === 'success') {
+                        delete pis[piId];
+                        renderPis();
+                        showToast('裝置已移除', 'success');
+                    }
+                } catch (err) {
+                    showToast('移除失敗', 'error');
+                }
+            }
+        }
+
+        async function addNewPi() {
+            const piId = document.getElementById('new-pi-id').value.trim();
+            const host = document.getElementById('new-pi-host').value.trim();
+            const port = parseInt(document.getElementById('new-pi-port').value) || 5000;
+            const name = document.getElementById('new-pi-name').value.trim();
+
+            if (!piId || !host) {
+                showToast('請填入裝置 ID 和主機名稱', 'error');
+                return;
+            }
+
+            try {
+                const resp = await fetch('/api/pi', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        pi_id: piId,
+                        host: host,
+                        port: port,
+                        name: name || piId
+                    })
+                });
+                const data = await resp.json();
+
+                if (data.status === 'success') {
+                    pis[piId] = data.pi;
+                    renderPis();
+                    closeAddPiModal();
+                    showToast(`${data.pi.name} 已新增`, 'success');
+                } else {
+                    showToast(`新增失敗: ${data.error}`, 'error');
+                }
+            } catch (err) {
+                showToast('新增失敗', 'error');
+            }
+        }
+
+        async function setAllBrightness(brightness) {
+            for (const piId in pis) {
+                await setBrightness(piId, brightness);
+                await new Promise(resolve => setTimeout(resolve, 100)); // 延遲以避免過快
+            }
+        }
+
+        // ===== UI 函數 =====
+        function renderPis() {
+            const container = document.getElementById('pi-container');
+            const emptyState = document.getElementById('empty-state');
+            const globalControls = document.getElementById('global-controls');
+
+            if (Object.keys(pis).length === 0) {
+                container.innerHTML = '';
+                emptyState.classList.remove('hidden');
+                globalControls.classList.add('hidden');
+            } else {
+                emptyState.classList.add('hidden');
+                globalControls.classList.remove('hidden');
+                container.innerHTML = Object.keys(pis)
+                    .map(piId => createPiCard(piId, pis[piId]))
+                    .join('');
+                
+                // 附加事件監聽器
+                Object.keys(pis).forEach(piId => {
+                    const slider = document.getElementById(`slider-${piId}`);
+                    if (slider) {
+                        slider.addEventListener('input', (e) => {
+                            const newBrightness = parseInt(e.target.value);
+                            document.getElementById(`brightness-val-${piId}`).textContent = newBrightness;
+                            
+                            // 防抖 - 只在用戶停止滑動後才發送
+                            clearTimeout(brightnessTimers[piId]);
+                            brightnessTimers[piId] = setTimeout(() => {
+                                setBrightness(piId, newBrightness);
+                            }, 300);
+                        });
+                    }
+                });
+            }
+
+            document.getElementById('pi-count').textContent = Object.keys(pis).length;
+        }
+
+        function createPiCard(piId, piData) {
+            const statusClass = piData.status === 'online' ? 'status-online' : 'status-offline';
+            const statusText = piData.status === 'online' ? '🟢 連接中' : '🔴 離線';
+
+            return `
+                <div class="pi-card bg-slate-800 rounded-lg p-6 border border-slate-700">
+                    <!-- 標題欄 -->
+                    <div class="flex justify-between items-start mb-4">
+                        <div>
+                            <h3 class="text-lg font-bold text-cyan-400">${piData.name}</h3>
+                            <p class="text-xs text-gray-500">${piId} • ${piData.host}:${piData.port}</p>
+                        </div>
+                        <span class="px-3 py-1 rounded-full text-xs font-semibold ${statusClass}">
+                            ${statusText}
+                        </span>
+                    </div>
+
+                    <!-- 亮度顯示 -->
+                    <div class="mb-4">
+                        <div class="flex justify-between items-center mb-2">
+                            <label class="text-sm text-gray-400">亮度</label>
+                            <span id="brightness-val-${piId}" class="text-xl font-bold text-cyan-400">${piData.brightness}</span>
+                        </div>
+                        <input 
+                            type="range" 
+                            id="slider-${piId}"
+                            min="0" 
+                            max="255" 
+                            value="${piData.brightness}"
+                            class="w-full h-3 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-cyan-500"
+                        >
+                    </div>
+
+                    <!-- 快速按鈕 -->
+                    <div class="grid grid-cols-2 gap-2 mb-4">
+                        <button onclick="setBrightness('${piId}', 0)" class="py-2 px-3 bg-red-600 hover:bg-red-500 text-xs font-semibold rounded transition">
+                            🔴 關
+                        </button>
+                        <button onclick="setBrightness('${piId}', 255)" class="py-2 px-3 bg-green-600 hover:bg-green-500 text-xs font-semibold rounded transition">
+                            🟢 開
+                        </button>
+                    </div>
+
+                    <!-- 管理按鈕 -->
+                    <div class="grid grid-cols-2 gap-2">
+                        <button id="test-btn-${piId}" onclick="testPi('${piId}')" class="py-2 px-3 bg-blue-600 hover:bg-blue-500 text-xs font-semibold rounded transition">
+                            ✓ 測試連接
+                        </button>
+                        <button onclick="deletePi('${piId}')" class="py-2 px-3 bg-gray-600 hover:bg-gray-500 text-xs font-semibold rounded transition">
+                            🗑️ 移除
+                        </button>
+                    </div>
+                </div>
+            `;
+        }
+
+        function updatePiStatus() {
+            Object.keys(pis).forEach(piId => {
+                updatePiCard(piId);
+            });
+        }
+
+        function updatePiCard(piId) {
+            const piData = pis[piId];
+            const statusElement = document.querySelector(`[data-pi-id="${piId}"] .status-indicator`);
+            
+            if (statusElement) {
+                const statusClass = piData.status === 'online' ? 'status-online' : 'status-offline';
+                statusElement.className = `px-3 py-1 rounded-full text-xs font-semibold ${statusClass}`;
+                statusElement.textContent = piData.status === 'online' ? '🟢 連接中' : '🔴 離線';
+            }
+        }
+
+        function updateSlider(piId) {
+            const slider = document.getElementById(`slider-${piId}`);
+            if (slider) {
+                slider.value = pis[piId].brightness;
+            }
+        }
+
+        // ===== Modal 函數 =====
+        function showAddPiModal() {
+            document.getElementById('add-pi-modal').classList.remove('hidden');
+        }
+
+        function closeAddPiModal() {
+            document.getElementById('add-pi-modal').classList.add('hidden');
+            document.getElementById('new-pi-id').value = '';
+            document.getElementById('new-pi-host').value = '';
+            document.getElementById('new-pi-port').value = '5000';
+            document.getElementById('new-pi-name').value = '';
+        }
+
+        // ===== 通知函數 =====
+        function showToast(message, type = 'info') {
+            const container = document.getElementById('toast-container');
+            const bgColor = {
+                'success': 'bg-green-600',
+                'error': 'bg-red-600',
+                'info': 'bg-blue-600'
+            }[type] || 'bg-blue-600';
+
+            const toast = document.createElement('div');
+            toast.className = `${bgColor} px-4 py-3 rounded-lg shadow-lg text-sm font-semibold transition-all`;
+            toast.textContent = message;
+            container.appendChild(toast);
+
+            setTimeout(() => {
+                toast.style.opacity = '0';
+                setTimeout(() => toast.remove(), 300);
+            }, 3000);
+        }
+
+        // ===== 頁面卸載 =====
+        window.addEventListener('beforeunload', () => {
+            // 清除定時器
+            Object.values(brightnessTimers).forEach(timer => clearTimeout(timer));
+        });
+
+        // ===== 啟動 =====
+        init();
+    </script>
+</body>
+</html>

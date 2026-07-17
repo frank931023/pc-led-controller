@@ -1,0 +1,13 @@
+version: '3.8'
+
+services:
+  led-controller:
+    build: .
+    container_name: pc-led-controller
+    ports:
+      - "5001:5001"
+    restart: unless-stopped
+    volumes:
+      - ./pi_config.json:/app/pi_config.json
+    environment:
+      - FLASK_ENV=production
