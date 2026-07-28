@@ -3,15 +3,11 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>LED 控制中心</title>
+    <title>天車控制中心</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
         .pi-card {
             transition: all 0.3s ease;
-        }
-        .pi-card:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 10px 25px rgba(0, 0, 0, 0.2);
         }
         .status-online {
             background-color: #10b981;
@@ -22,23 +18,24 @@
         .status-no-arduino {
             background-color: #f59e0b;
         }
-        .slider-track {
-            background: linear-gradient(to right, #dc2626, #fbbf24, #10b981);
+        .cmd-btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
         }
     </style>
 </head>
 <body class="bg-gradient-to-br from-slate-950 via-slate-900 to-slate-800 text-white min-h-screen">
     <div class="container mx-auto px-4 py-8">
         <!-- 標題 -->
-        <div class="text-center mb-12">
+        <div class="text-center mb-8">
             <h1 class="text-4xl font-bold mb-2 bg-gradient-to-r from-cyan-400 to-blue-500 bg-clip-text text-transparent">
-                💡 LED 控制中心
+                🎛️ 天車控制中心
             </h1>
-            <p class="text-gray-400">管理和控制多台樹梅派上的 Arduino 燈號</p>
+            <p class="text-gray-400">控制多台樹莓派上的 Arduino 天車（X/Y/Z 滑台、旋轉、傾角）</p>
         </div>
 
         <!-- 系統狀態欄 -->
-        <div class="mb-8 bg-slate-800 rounded-lg p-6 border border-slate-700">
+        <div class="mb-4 bg-slate-800 rounded-lg p-6 border border-slate-700">
             <div class="flex justify-between items-center">
                 <div>
                     <span class="text-gray-400 text-sm">連接的裝置</span>
@@ -55,8 +52,23 @@
             </div>
         </div>
 
+        <!-- LED 對照說明（模擬版限定） -->
+        <details class="mb-8 bg-slate-800/60 rounded-lg border border-slate-700 text-sm">
+            <summary class="cursor-pointer px-6 py-3 text-gray-300 font-semibold select-none">
+                ℹ️ LED 模擬版說明（點開查看注意事項）
+            </summary>
+            <div class="px-6 pb-4 text-gray-400 space-y-1">
+                <p>動作燈 = D9，狀態燈 = D10；每個指令按鈕旁邊都標示了預期的 LED 反應，方便對照實體燈號是否符合預期。</p>
+                <ul class="list-disc list-inside space-y-1">
+                    <li>動作燈跑完<b class="text-gray-300">不會熄</b>，會停在代表目前位置的亮度。</li>
+                    <li>兩顆燈是所有軸共用的，只反映<b class="text-gray-300">最後一個動過的軸</b>。</li>
+                    <li>沒跑過對應軸的「校正」之前，該軸的「移動」一律回報超出行程，<b class="text-gray-300">燈不會動</b>。</li>
+                </ul>
+            </div>
+        </details>
+
         <!-- Pi 卡片容器 -->
-        <div id="pi-container" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 mb-8">
+        <div id="pi-container" class="grid grid-cols-1 2xl:grid-cols-2 gap-6 mb-8">
             <!-- 動態生成的 Pi 卡片 -->
         </div>
 
@@ -69,14 +81,14 @@
         </div>
 
         <!-- 全局控制 -->
-        <div id="global-controls" class="hidden mt-12 bg-slate-800 rounded-lg p-6 border border-slate-700">
+        <div id="global-controls" class="hidden mt-4 bg-slate-800 rounded-lg p-6 border border-slate-700">
             <h2 class="text-xl font-bold mb-4">全局控制</h2>
             <div class="grid grid-cols-2 gap-4">
-                <button onclick="setAllBrightness(0)" class="py-3 bg-red-600 hover:bg-red-500 font-semibold rounded-lg transition">
-                    🔴 全部關閉
+                <button onclick="homeAllDevices()" class="py-3 bg-blue-600 hover:bg-blue-500 font-semibold rounded-lg transition">
+                    🏠 全部裝置歸位（X/Y/Z/旋轉）
                 </button>
-                <button onclick="setAllBrightness(255)" class="py-3 bg-green-600 hover:bg-green-500 font-semibold rounded-lg transition">
-                    🟢 全部開啟
+                <button onclick="testAllDevices()" class="py-3 bg-cyan-600 hover:bg-cyan-500 font-semibold rounded-lg transition">
+                    📡 全部裝置測試連接
                 </button>
             </div>
         </div>
@@ -86,7 +98,7 @@
     <div id="add-pi-modal" class="hidden fixed inset-0 bg-black/50 flex items-center justify-center z-50">
         <div class="bg-slate-800 rounded-lg p-8 max-w-md w-full mx-4 border border-slate-700">
             <h2 class="text-2xl font-bold mb-6">新增裝置</h2>
-            
+
             <div class="space-y-4 mb-6">
                 <div>
                     <label class="block text-sm text-gray-400 mb-1">裝置 ID</label>
@@ -121,10 +133,59 @@
     <div id="toast-container" class="fixed bottom-6 right-6 space-y-2 z-40"></div>
 
     <script>
+        // ===== 指令設定：每個指令附上預期的 LED 反應（LED 模擬版韌體，動作燈=D9／狀態燈=D10） =====
+        // timeoutSec 是送給 PC /api/pi/<id>/command 的 timeout 欄位，PC 會原樣轉發給 Pi，
+        // Pi 再轉發給 Arduino 端的等待時間上限。數值刻意抓寬鬆一點，涵蓋未來真機校正/歸位
+        // 可能超過 30 秒的情況；模擬版本身跑得快，實際不會等那麼久。
+        const AXIS_GROUPS = [
+            {
+                title: 'X 軸', range: '行程 0–1000mm',
+                calibrate: { cmd: 'SXC', label: '校正', led: '狀態燈亮 → 動作燈降到全暗再升到 255 → 熄（約 3.8s）', timeoutSec: 40 },
+                home:      { cmd: 'SXH', label: '歸位', led: '狀態燈亮 → 動作燈滑到全暗 → 熄（約 3.8s）', timeoutSec: 40 },
+                position:  { cmd: 'SXP', label: '查詢位置', led: '無變化', timeoutSec: 10 },
+                move:      { prefix: 'SXM', label: '移動', led: '狀態燈亮 → 動作燈滑到 mm/1000×255 → 熄（約 1.9s）；超出行程時無變化', unit: 'mm', min: 0, max: 1000, timeoutSec: 40 }
+            },
+            {
+                title: 'Y 軸', range: '行程 0–1000mm',
+                calibrate: { cmd: 'SYC', label: '校正', led: '狀態燈亮 → 動作燈降到全暗再升到 180 → 熄（約 3.9s）', timeoutSec: 40 },
+                home:      { cmd: 'SYH', label: '歸位', led: '狀態燈亮 → 動作燈滑到全暗 → 熄（約 3.9s）', timeoutSec: 40 },
+                position:  { cmd: 'SYP', label: '查詢位置', led: '無變化', timeoutSec: 10 },
+                move:      { prefix: 'SYM', label: '移動', led: '狀態燈亮 → 動作燈滑到 mm/1000×180 → 熄（約 1.9s）；超出行程時無變化', unit: 'mm', min: 0, max: 1000, timeoutSec: 40 }
+            },
+            {
+                title: 'Z 軸', range: '行程 0–300mm',
+                calibrate: { cmd: 'SZC', label: '校正', led: '狀態燈亮 → 動作燈降到全暗再升到 110 → 熄（約 3.5s）', timeoutSec: 40 },
+                home:      { cmd: 'SZH', label: '歸位', led: '狀態燈亮 → 動作燈滑到全暗 → 熄（約 3.5s）', timeoutSec: 40 },
+                position:  { cmd: 'SZP', label: '查詢位置', led: '無變化', timeoutSec: 10 },
+                move:      { prefix: 'SZM', label: '移動', led: '狀態燈亮 → 動作燈滑到 mm/300×110 → 熄（約 2.0s）；超出行程時無變化', unit: 'mm', min: 0, max: 300, timeoutSec: 40 }
+            }
+        ];
+
+        const ROTATION_GROUP = {
+            title: '旋轉', range: '−180° ~ 180°',
+            calibrate: { cmd: 'RC', label: '校正', led: '無變化（move_r() 等仍是空 stub）', timeoutSec: 40 },
+            home:      { cmd: 'RH', label: '歸位', led: '無變化（move_r() 等仍是空 stub）', timeoutSec: 40 },
+            position:  { cmd: 'RP', label: '查詢角度', led: '無變化', note: '韌體副作用：查詢時會多觸發一次旋轉歸位，回應會多一行 "Homing rotation"', timeoutSec: 40 },
+            move:      { prefix: 'RM', label: '旋轉', led: '無變化（move_r() 等仍是空 stub）', unit: '度', min: -180, max: 180, timeoutSec: 40 }
+        };
+
+        const TILT_GROUP = {
+            title: '傾角', range: '0° ~ 90°',
+            position: { cmd: 'TP', label: '查詢傾角', led: '無變化', note: '韌體副作用：會觸發旋轉歸位（不是傾角本身），回應會多一行 "Homing rotation"', timeoutSec: 40 },
+            move:     { prefix: 'TM', label: '傾斜', led: '無變化（TM 目前沒有呼叫 tilt_speaker()，實體不會動）', unit: '度', min: 0, max: 90, timeoutSec: 20 }
+        };
+
+        const LED_TEST_BUTTONS = [
+            { cmd: 'L0', label: 'L0', led: '兩顆全暗' },
+            { cmd: 'L1', label: 'L1', led: '動作燈全亮，狀態燈熄' },
+            { cmd: 'L2', label: 'L2', led: '狀態燈全亮，動作燈熄' },
+            { cmd: 'L3', label: 'L3', led: '兩顆全亮' }
+        ];
+
         // ===== 全局變數 =====
         let pis = {};
-        let brightnessTimers = {};
         let refreshing = false;
+        let cmdCounter = 0; // 給移動指令的 input 產生不重複 id
 
         // ===== 初始化 =====
         async function init() {
@@ -155,7 +216,7 @@
                 if (data.status === 'success') {
                     const changed = Object.keys(data.pis).join() !== Object.keys(pis).join();
                     pis = data.pis;
-                    // 裝置增減時要重畫，否則新卡片不會出現
+                    // 裝置增減時要重畫（會連帶重置卡片上的輸入框/紀錄），否則只更新狀態燈號
                     if (changed) renderPis(); else updatePiStatus();
                 }
             } catch (err) {
@@ -165,25 +226,78 @@
             }
         }
 
-        async function setBrightness(piId, brightness) {
+        /**
+         * 送出一個天車指令並更新該 Pi 卡片的紀錄面板。
+         * 回傳 { ok, result } 讓呼叫端（例如全部歸位的循序流程）可以判斷要不要繼續下一步。
+         */
+        async function runCommand(piId, cmd, ledExpectation, timeoutSec, note) {
+            setCardBusy(piId, true, cmd);
+
+            let outcome = { ok: false };
             try {
-                const resp = await fetch(`/api/pi/${piId}/brightness`, {
+                const resp = await fetch(`/api/pi/${piId}/command`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ brightness: brightness })
+                    body: JSON.stringify({ command: cmd, timeout: timeoutSec })
                 });
                 const data = await resp.json();
-                
+
                 if (data.status === 'success') {
-                    pis[piId].brightness = brightness;
-                    updateSlider(piId);
-                    showToast(`${pis[piId].name} 亮度已設定為 ${brightness}`, 'success');
+                    const piResp = data.pi_response || {};
+                    // 正常應該是陣列（新版 Pi 端協定），但 Pi 上跑的版本可能還沒更新到那個格式，
+                    // 這時 arduino_response 會是單一字串——正規化成陣列，不管哪種都不會炸。
+                    const rawResponse = piResp.arduino_response;
+                    const lines = Array.isArray(rawResponse) ? rawResponse
+                        : (rawResponse != null && rawResponse !== '' ? [String(rawResponse)] : []);
+                    const result = piResp.arduino_result;
+                    const exceeded = lines.some(l => /exceeded max travel/i.test(l));
+
+                    let badge;
+                    if (result === 'DONE') {
+                        badge = exceeded
+                            ? { text: '⚠️ DONE，但超出行程未實際移動', cls: 'text-amber-400' }
+                            : { text: '✅ DONE', cls: 'text-green-400' };
+                    } else if (result === 'ERR') {
+                        badge = { text: '❌ ERR：韌體看不懂這個指令', cls: 'text-red-400' };
+                    } else if (!result && lines.length) {
+                        badge = { text: '⚠️ 收到回應，但格式跟預期不同（Pi 端可能是舊版）', cls: 'text-amber-400' };
+                    } else {
+                        badge = { text: result || '（無回應內容）', cls: 'text-gray-400' };
+                    }
+
+                    updateLog(piId, cmd, ledExpectation, note, badge, lines);
+                    if (pis[piId]) pis[piId].status = 'online';
+                    outcome = { ok: result === 'DONE' && !exceeded, result, lines };
                 } else {
-                    showToast(`設定失敗: ${data.error}`, 'error');
+                    updateLog(piId, cmd, ledExpectation, note, { text: `🔌 ${data.error || '連線失敗'}`, cls: 'text-red-400' }, []);
+                    refreshStatus();
                 }
             } catch (err) {
-                showToast('設定亮度失敗', 'error');
+                updateLog(piId, cmd, ledExpectation, note, { text: `🔌 連線失敗：${err.message}`, cls: 'text-red-400' }, []);
+                refreshStatus();
+            } finally {
+                setCardBusy(piId, false);
+                updatePiCard(piId);
             }
+
+            return outcome;
+        }
+
+        async function homeOneDevice(piId) {
+            await runCommand(piId, 'SXH', 'X 軸：狀態燈亮 → 動作燈滑到全暗 → 熄', 40);
+            await runCommand(piId, 'SYH', 'Y 軸：狀態燈亮 → 動作燈滑到全暗 → 熄', 40);
+            await runCommand(piId, 'SZH', 'Z 軸：狀態燈亮 → 動作燈滑到全暗 → 熄', 40);
+            await runCommand(piId, 'RH', '旋轉：無變化（move_r() 等仍是空 stub）', 40);
+        }
+
+        async function homeAllDevices() {
+            showToast('開始全部裝置歸位（依序 X→Y→Z→旋轉，裝置間並行）', 'info');
+            await Promise.all(Object.keys(pis).map(piId => homeOneDevice(piId)));
+            showToast('全部裝置歸位流程已送出完畢', 'success');
+        }
+
+        async function testAllDevices() {
+            await Promise.all(Object.keys(pis).map(piId => testPi(piId)));
         }
 
         async function testPi(piId) {
@@ -224,7 +338,7 @@
                         method: 'DELETE'
                     });
                     const data = await resp.json();
-                    
+
                     if (data.status === 'success') {
                         delete pis[piId];
                         renderPis();
@@ -273,11 +387,32 @@
             }
         }
 
-        async function setAllBrightness(brightness) {
-            for (const piId in pis) {
-                await setBrightness(piId, brightness);
-                await new Promise(resolve => setTimeout(resolve, 100)); // 延遲以避免過快
+        // ===== 指令按鈕的事件處理（統一讀取按鈕上的 data-* 屬性，避免把動態字串塞進 onclick） =====
+        function handleActionClick(btn) {
+            const { piId, cmd, led, timeoutSec, note } = btn.dataset;
+            runCommand(piId, cmd, led, parseFloat(timeoutSec), note || undefined);
+        }
+
+        function handleMoveClick(btn) {
+            const { piId, prefix, led, timeoutSec, inputId, unit } = btn.dataset;
+            const input = document.getElementById(inputId);
+            const value = input.value.trim();
+            if (value === '' || isNaN(Number(value))) {
+                showToast(`請輸入有效的${unit}數值`, 'error');
+                return;
             }
+            runCommand(piId, `${prefix},${value}`, led, parseFloat(timeoutSec));
+        }
+
+        function handleCustomCommandClick(btn) {
+            const { piId } = btn.dataset;
+            const input = document.getElementById(`custom-cmd-${piId}`);
+            const cmd = input.value.trim();
+            if (!cmd) {
+                showToast('請輸入指令', 'error');
+                return;
+            }
+            runCommand(piId, cmd, '依指令而定，請對照下方分類按鈕旁的 LED 說明', 20);
         }
 
         // ===== UI 函數 =====
@@ -296,23 +431,6 @@
                 container.innerHTML = Object.keys(pis)
                     .map(piId => createPiCard(piId, pis[piId]))
                     .join('');
-                
-                // 附加事件監聽器
-                Object.keys(pis).forEach(piId => {
-                    const slider = document.getElementById(`slider-${piId}`);
-                    if (slider) {
-                        slider.addEventListener('input', (e) => {
-                            const newBrightness = parseInt(e.target.value);
-                            document.getElementById(`brightness-val-${piId}`).textContent = newBrightness;
-                            
-                            // 防抖 - 只在用戶停止滑動後才發送
-                            clearTimeout(brightnessTimers[piId]);
-                            brightnessTimers[piId] = setTimeout(() => {
-                                setBrightness(piId, newBrightness);
-                            }, 300);
-                        });
-                    }
-                });
             }
 
             document.getElementById('pi-count').textContent = Object.keys(pis).length;
@@ -325,8 +443,92 @@
             return { cls: 'status-offline', text: '🔴 離線' };
         }
 
+        function actionButtonHtml(piId, action) {
+            const noteHtml = action.note
+                ? `<div class="text-[10px] text-amber-400/80 mt-0.5">⚠ ${action.note}</div>`
+                : '';
+            return `
+                <div class="flex items-start gap-2">
+                    <button
+                        class="cmd-btn shrink-0 w-28 py-1.5 px-2 bg-slate-700 hover:bg-cyan-600 text-xs font-semibold rounded transition"
+                        data-pi-id="${piId}" data-cmd="${action.cmd}" data-led="${action.led}"
+                        data-timeout-sec="${action.timeoutSec}" ${action.note ? `data-note="${action.note}"` : ''}
+                        onclick="handleActionClick(this)">
+                        ${action.label} (${action.cmd})
+                    </button>
+                    <div class="text-[11px] text-gray-400 leading-snug pt-1.5">
+                        LED：${action.led}${noteHtml}
+                    </div>
+                </div>`;
+        }
+
+        function moveRowHtml(piId, move) {
+            const inputId = `move-${piId}-${move.prefix}-${cmdCounter++}`;
+            return `
+                <div class="flex items-start gap-2">
+                    <div class="shrink-0 w-28 flex gap-1">
+                        <input id="${inputId}" type="number" min="${move.min}" max="${move.max}" step="any"
+                            placeholder="${move.unit}"
+                            class="w-14 px-1 py-1.5 bg-slate-900 border border-slate-600 rounded text-xs text-white">
+                        <button
+                            class="cmd-btn flex-1 py-1.5 px-1 bg-slate-700 hover:bg-cyan-600 text-xs font-semibold rounded transition"
+                            data-pi-id="${piId}" data-prefix="${move.prefix}" data-led="${move.led}"
+                            data-timeout-sec="${move.timeoutSec}" data-input-id="${inputId}" data-unit="${move.unit}"
+                            onclick="handleMoveClick(this)">
+                            ${move.label}
+                        </button>
+                    </div>
+                    <div class="text-[11px] text-gray-400 leading-snug pt-1.5">
+                        LED：${move.led}
+                    </div>
+                </div>`;
+        }
+
+        function groupHtml(piId, group) {
+            let rows = '';
+            if (group.calibrate) rows += actionButtonHtml(piId, group.calibrate);
+            if (group.home) rows += actionButtonHtml(piId, group.home);
+            if (group.position) rows += actionButtonHtml(piId, group.position);
+            if (group.move) rows += moveRowHtml(piId, group.move);
+
+            return `
+                <div class="bg-slate-900/60 rounded-lg p-3 border border-slate-700">
+                    <div class="flex items-baseline justify-between mb-2">
+                        <h4 class="text-sm font-bold text-cyan-300">${group.title}</h4>
+                        <span class="text-[11px] text-gray-500">${group.range}</span>
+                    </div>
+                    <div class="space-y-2">${rows}</div>
+                </div>`;
+        }
+
+        function ledTestHtml(piId) {
+            const buttons = LED_TEST_BUTTONS.map(b => `
+                <button
+                    class="cmd-btn py-1.5 px-2 bg-slate-700 hover:bg-purple-600 text-xs font-semibold rounded transition"
+                    data-pi-id="${piId}" data-cmd="${b.cmd}" data-led="${b.led}" data-timeout-sec="5"
+                    onclick="handleActionClick(this)" title="LED：${b.led}">
+                    ${b.label}
+                </button>`).join('');
+
+            return `
+                <div class="bg-slate-900/60 rounded-lg p-3 border border-slate-700">
+                    <div class="flex items-baseline justify-between mb-2">
+                        <h4 class="text-sm font-bold text-purple-300">LED 接線測試</h4>
+                        <span class="text-[11px] text-gray-500">僅限模擬版韌體</span>
+                    </div>
+                    <div class="flex gap-2 flex-wrap">${buttons}</div>
+                    <div class="mt-2 text-[11px] text-gray-500 space-y-0.5">
+                        ${LED_TEST_BUTTONS.map(b => `<div>${b.cmd}：${b.led}</div>`).join('')}
+                    </div>
+                </div>`;
+        }
+
         function createPiCard(piId, piData) {
             const { cls, text } = statusInfo(piData.status);
+
+            const groupsHtml = [...AXIS_GROUPS, ROTATION_GROUP, TILT_GROUP]
+                .map(g => groupHtml(piId, g))
+                .join('');
 
             return `
                 <div class="pi-card bg-slate-800 rounded-lg p-6 border border-slate-700" data-pi-id="${piId}">
@@ -341,30 +543,26 @@
                         </span>
                     </div>
 
-                    <!-- 亮度顯示 -->
-                    <div class="mb-4">
-                        <div class="flex justify-between items-center mb-2">
-                            <label class="text-sm text-gray-400">亮度</label>
-                            <span id="brightness-val-${piId}" class="text-xl font-bold text-cyan-400">${piData.brightness}</span>
-                        </div>
-                        <input 
-                            type="range" 
-                            id="slider-${piId}"
-                            min="0" 
-                            max="255" 
-                            value="${piData.brightness}"
-                            class="w-full h-3 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-cyan-500"
-                        >
+                    <!-- 指令面板 -->
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-3 mb-3">
+                        ${groupsHtml}
+                        ${ledTestHtml(piId)}
                     </div>
 
-                    <!-- 快速按鈕 -->
-                    <div class="grid grid-cols-2 gap-2 mb-4">
-                        <button onclick="setBrightness('${piId}', 0)" class="py-2 px-3 bg-red-600 hover:bg-red-500 text-xs font-semibold rounded transition">
-                            🔴 關
+                    <!-- 自訂指令 -->
+                    <div class="flex gap-2 mb-3">
+                        <input id="custom-cmd-${piId}" type="text" placeholder="自訂指令，例：?"
+                            class="flex-1 px-3 py-2 bg-slate-900 border border-slate-600 rounded text-sm text-white placeholder-gray-500 font-mono">
+                        <button
+                            class="cmd-btn py-2 px-4 bg-slate-700 hover:bg-cyan-600 text-xs font-semibold rounded transition"
+                            data-pi-id="${piId}" onclick="handleCustomCommandClick(this)">
+                            送出
                         </button>
-                        <button onclick="setBrightness('${piId}', 255)" class="py-2 px-3 bg-green-600 hover:bg-green-500 text-xs font-semibold rounded transition">
-                            🟢 開
-                        </button>
+                    </div>
+
+                    <!-- 執行紀錄 -->
+                    <div id="log-${piId}" class="bg-slate-900/80 rounded-lg p-3 border border-slate-700 text-sm mb-4 min-h-[4.5rem]">
+                        <span class="text-gray-500 text-xs">尚未送出任何指令</span>
                     </div>
 
                     <!-- 管理按鈕 -->
@@ -399,11 +597,37 @@
             statusElement.textContent = text;
         }
 
-        function updateSlider(piId) {
-            const slider = document.getElementById(`slider-${piId}`);
-            if (slider) {
-                slider.value = pis[piId].brightness;
+        function setCardBusy(piId, busy, cmd) {
+            const card = document.querySelector(`[data-pi-id="${piId}"]`);
+            if (!card) return;
+            card.querySelectorAll('.cmd-btn').forEach(btn => { btn.disabled = busy; });
+
+            if (busy) {
+                const log = document.getElementById(`log-${piId}`);
+                if (log) {
+                    log.innerHTML = `<span class="text-gray-400 text-xs">⏳ 執行中：<span class="font-mono">${cmd}</span>（指令是阻塞的，天車韌體回 DONE 前不會回應）</span>`;
+                }
             }
+        }
+
+        function updateLog(piId, cmd, ledExpectation, note, badge, lines) {
+            const log = document.getElementById(`log-${piId}`);
+            if (!log) return;
+
+            const noteHtml = note ? `<div class="text-amber-400/80 text-[11px] mt-1">⚠ ${note}</div>` : '';
+            const linesHtml = lines && lines.length
+                ? `<div class="text-gray-400 text-[11px] mt-1 whitespace-pre-wrap font-mono">${lines.join('\n')}</div>`
+                : '';
+
+            log.innerHTML = `
+                <div class="flex justify-between items-baseline">
+                    <span class="font-mono text-cyan-300">${cmd}</span>
+                    <span class="text-xs font-semibold ${badge.cls}">${badge.text}</span>
+                </div>
+                <div class="text-gray-500 text-[11px] mt-1">預期 LED：${ledExpectation}</div>
+                ${noteHtml}
+                ${linesHtml}
+            `;
         }
 
         // ===== Modal 函數 =====
@@ -438,12 +662,6 @@
                 setTimeout(() => toast.remove(), 300);
             }, 3000);
         }
-
-        // ===== 頁面卸載 =====
-        window.addEventListener('beforeunload', () => {
-            // 清除定時器
-            Object.values(brightnessTimers).forEach(timer => clearTimeout(timer));
-        });
 
         // ===== 啟動 =====
         init();

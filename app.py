@@ -27,23 +27,24 @@ _config_lock = threading.RLock()
 
 # 檢測 Pi 連線的 timeout（秒）
 STATUS_TIMEOUT = 3
-COMMAND_TIMEOUT = 5
+COMMAND_TIMEOUT = 10
+# 呼叫端可用 timeout 欄位覆蓋 COMMAND_TIMEOUT（校正類指令在真機上可能需要拉到 30 秒以上），
+# 這裡另外加一段緩衝給網路來回，避免 Pi 那邊都還沒判定逾時，PC 端的 requests 就先斷線。
+COMMAND_TIMEOUT_BUFFER = 5
 
 # 預設配置
 DEFAULT_CONFIG = {
     "pis": {
-        "pi-001": {
+        "pi-01": {
             "host": "172.18.177.105",
             "port": 5000,
             "name": "pi-01",
-            "brightness": 0,
             "status": "offline"
         },
-        "pi-002": {
+        "pi-02": {
             "host": "172.18.177.104",
             "port": 5000,
             "name": "pi-02",
-            "brightness": 0,
             "status": "offline"
         }
     }
@@ -85,15 +86,13 @@ def save_config(config):
             print(f"Error saving config: {e}")
 
 
-def set_pi_status(pi_id, status, brightness=None):
+def set_pi_status(pi_id, status):
     """更新單一 Pi 的狀態並存檔（read-modify-write 全程持鎖）"""
     with _config_lock:
         config = load_config()
         if pi_id not in config['pis']:
             return None
         config['pis'][pi_id]['status'] = status
-        if brightness is not None:
-            config['pis'][pi_id]['brightness'] = brightness
         save_config(config)
         return config['pis'][pi_id]
 
@@ -177,56 +176,9 @@ def get_pi(pi_id):
     })
 
 
-@app.route('/api/pi/<pi_id>/brightness', methods=['POST'])
-def set_brightness(pi_id):
-    """設定特定 Pi 上的 LED 亮度"""
-    config = load_config()
-    if pi_id not in config['pis']:
-        return jsonify({"status": "error", "error": "Pi not found"}), 404
-
-    data = json_body()
-    if data is None:
-        return jsonify(BAD_JSON[0]), BAD_JSON[1]
-
-    try:
-        brightness = max(0, min(255, int(data.get('brightness', 0))))
-    except (TypeError, ValueError):
-        return jsonify({
-            "status": "error",
-            "error": f"Invalid brightness value: {data.get('brightness')!r}"
-        }), 400
-
-    url = get_pi_url(config['pis'][pi_id], '/api/set_brightness')
-
-    try:
-        resp = requests.post(url, json={"value": brightness}, timeout=COMMAND_TIMEOUT)
-    except requests.exceptions.Timeout:
-        set_pi_status(pi_id, "offline")
-        return jsonify({"status": "error", "error": "Connection timeout"}), 504
-    except requests.exceptions.RequestException as e:
-        set_pi_status(pi_id, "offline")
-        return jsonify({"status": "error", "error": f"Connection failed: {e}"}), 502
-
-    if resp.status_code != 200:
-        # Pi 回 503 代表 Flask 活著但 Arduino 斷線
-        set_pi_status(pi_id, "no-arduino" if resp.status_code == 503 else "offline")
-        return jsonify({
-            "status": "error",
-            "error": pi_error(resp, "Failed to set brightness on Pi")
-        }), 502
-
-    set_pi_status(pi_id, "online", brightness=brightness)
-    return jsonify({
-        "status": "success",
-        "pi_id": pi_id,
-        "brightness": brightness,
-        "pi_response": safe_json(resp)
-    })
-
-
 @app.route('/api/pi/<pi_id>/command', methods=['POST'])
 def send_command(pi_id):
-    """發送自訂命令到 Pi"""
+    """發送自訂命令到 Pi。可選的 timeout 欄位（秒）會轉發給 Pi，校正類指令需要較長時間"""
     config = load_config()
     if pi_id not in config['pis']:
         return jsonify({"status": "error", "error": "Pi not found"}), 404
@@ -239,10 +191,24 @@ def send_command(pi_id):
     if not cmd:
         return jsonify({"status": "error", "error": "Missing command"}), 400
 
+    payload = {"command": cmd}
+    request_timeout = COMMAND_TIMEOUT
+
+    if 'timeout' in data and data.get('timeout') not in (None, ''):
+        try:
+            client_timeout = float(data.get('timeout'))
+        except (TypeError, ValueError):
+            return jsonify({
+                "status": "error",
+                "error": f"Invalid timeout value: {data.get('timeout')!r}"
+            }), 400
+        payload['timeout'] = client_timeout
+        request_timeout = client_timeout + COMMAND_TIMEOUT_BUFFER
+
     url = get_pi_url(config['pis'][pi_id], '/api/command')
 
     try:
-        resp = requests.post(url, json={"command": cmd}, timeout=COMMAND_TIMEOUT)
+        resp = requests.post(url, json=payload, timeout=request_timeout)
     except requests.exceptions.Timeout:
         set_pi_status(pi_id, "offline")
         return jsonify({"status": "error", "error": "Connection timeout"}), 504
@@ -330,7 +296,6 @@ def add_pi():
         "host": host,
         "port": port,
         "name": name,
-        "brightness": 0,
         "status": "offline"
     }
 

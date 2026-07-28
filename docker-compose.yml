@@ -17,3 +17,12 @@ services:
       - CONFIG_FILE=${CONFIG_FILE:-/app/data/pi_config.json}
       # 正式環境務必保持 0：debug 會把 Werkzeug debugger 開放到區域網路
       - FLASK_DEBUG=${FLASK_DEBUG:-0}
+
+# 固定子網段，避免 Docker 自動選到跟公司/家裡 LAN 撞網段的範圍（例如這裡曾撞到
+# 172.18.0.0/16，剛好把實體 LAN 上的 172.18.177.0/25 也框進去，導致容器對外連線
+# 全部被本機的 bridge 網路攔截，出現 "No route to host"）。
+networks:
+  default:
+    ipam:
+      config:
+        - subnet: 192.168.250.0/24
