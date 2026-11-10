@@ -1,670 +1,76 @@
-<!DOCTYPE html>
-<html lang="zh-TW">
+<!doctype html>
+<html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>天車控制中心</title>
-    <script src="https://cdn.tailwindcss.com"></script>
-    <style>
-        .pi-card {
-            transition: all 0.3s ease;
-        }
-        .status-online {
-            background-color: #10b981;
-        }
-        .status-offline {
-            background-color: #6b7280;
-        }
-        .status-no-arduino {
-            background-color: #f59e0b;
-        }
-        .cmd-btn:disabled {
-            opacity: 0.5;
-            cursor: not-allowed;
-        }
-    </style>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Motion Control</title>
+<link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}?v={{ v }}">
 </head>
-<body class="bg-gradient-to-br from-slate-950 via-slate-900 to-slate-800 text-white min-h-screen">
-    <div class="container mx-auto px-4 py-8">
-        <!-- 標題 -->
-        <div class="text-center mb-8">
-            <h1 class="text-4xl font-bold mb-2 bg-gradient-to-r from-cyan-400 to-blue-500 bg-clip-text text-transparent">
-                🎛️ 天車控制中心
-            </h1>
-            <p class="text-gray-400">控制多台樹莓派上的 Arduino 天車（X/Y/Z 滑台、旋轉、傾角）</p>
-        </div>
+<body>
+<div class="shell">
+  <nav class="nav">
+    <div class="logo">M</div>
+    <div class="sp"></div>
+    <div class="st" id="nav-dot" title="Server connection"></div>
+  </nav>
 
-        <!-- 系統狀態欄 -->
-        <div class="mb-4 bg-slate-800 rounded-lg p-6 border border-slate-700">
-            <div class="flex justify-between items-center">
-                <div>
-                    <span class="text-gray-400 text-sm">連接的裝置</span>
-                    <div class="text-3xl font-bold text-cyan-400" id="pi-count">0</div>
-                </div>
-                <div class="flex gap-3">
-                    <button onclick="refreshStatus()" class="px-4 py-2 bg-cyan-600 hover:bg-cyan-500 rounded-lg text-sm font-semibold transition">
-                        🔄 刷新狀態
-                    </button>
-                    <button onclick="showAddPiModal()" class="px-4 py-2 bg-green-600 hover:bg-green-500 rounded-lg text-sm font-semibold transition">
-                        ➕ 新增裝置
-                    </button>
-                </div>
-            </div>
-        </div>
-
-        <!-- LED 對照說明（模擬版限定） -->
-        <details class="mb-8 bg-slate-800/60 rounded-lg border border-slate-700 text-sm">
-            <summary class="cursor-pointer px-6 py-3 text-gray-300 font-semibold select-none">
-                ℹ️ LED 模擬版說明（點開查看注意事項）
-            </summary>
-            <div class="px-6 pb-4 text-gray-400 space-y-1">
-                <p>動作燈 = D9，狀態燈 = D10；每個指令按鈕旁邊都標示了預期的 LED 反應，方便對照實體燈號是否符合預期。</p>
-                <ul class="list-disc list-inside space-y-1">
-                    <li>動作燈跑完<b class="text-gray-300">不會熄</b>，會停在代表目前位置的亮度。</li>
-                    <li>兩顆燈是所有軸共用的，只反映<b class="text-gray-300">最後一個動過的軸</b>。</li>
-                    <li>沒跑過對應軸的「校正」之前，該軸的「移動」一律回報超出行程，<b class="text-gray-300">燈不會動</b>。</li>
-                </ul>
-            </div>
-        </details>
-
-        <!-- Pi 卡片容器 -->
-        <div id="pi-container" class="grid grid-cols-1 2xl:grid-cols-2 gap-6 mb-8">
-            <!-- 動態生成的 Pi 卡片 -->
-        </div>
-
-        <!-- 空狀態提示 -->
-        <div id="empty-state" class="text-center py-20 text-gray-400">
-            <p class="text-lg mb-4">還沒有連接的裝置</p>
-            <button onclick="showAddPiModal()" class="px-6 py-2 bg-green-600 hover:bg-green-500 rounded-lg font-semibold transition">
-                新增第一台裝置
-            </button>
-        </div>
-
-        <!-- 全局控制 -->
-        <div id="global-controls" class="hidden mt-4 bg-slate-800 rounded-lg p-6 border border-slate-700">
-            <h2 class="text-xl font-bold mb-4">全局控制</h2>
-            <div class="grid grid-cols-2 gap-4">
-                <button onclick="homeAllDevices()" class="py-3 bg-blue-600 hover:bg-blue-500 font-semibold rounded-lg transition">
-                    🏠 全部裝置歸位（X/Y/Z/旋轉）
-                </button>
-                <button onclick="testAllDevices()" class="py-3 bg-cyan-600 hover:bg-cyan-500 font-semibold rounded-lg transition">
-                    📡 全部裝置測試連接
-                </button>
-            </div>
-        </div>
+  <div class="work">
+    <!-- Device list -->
+    <div class="panel">
+      <div class="top">
+        <h1>Devices</h1>
+        <span class="n" id="count"></span>
+        <span class="sp"></span>
+        <button class="primary" data-action="open-add">+ Add</button>
+      </div>
+      <div class="grow" id="list"><div class="empty">Loading…</div></div>
+      <div class="foot">
+        <button id="btn-home-all" data-action="home-all">Home all devices</button>
+        <button id="btn-test-all" data-action="test-all">Test all connections</button>
+      </div>
     </div>
 
-    <!-- 新增 Pi 的 Modal -->
-    <div id="add-pi-modal" class="hidden fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-        <div class="bg-slate-800 rounded-lg p-8 max-w-md w-full mx-4 border border-slate-700">
-            <h2 class="text-2xl font-bold mb-6">新增裝置</h2>
-
-            <div class="space-y-4 mb-6">
-                <div>
-                    <label class="block text-sm text-gray-400 mb-1">裝置 ID</label>
-                    <input id="new-pi-id" type="text" placeholder="例：pi-003" class="w-full px-4 py-2 bg-slate-700 rounded border border-slate-600 text-white placeholder-gray-500">
-                </div>
-                <div>
-                    <label class="block text-sm text-gray-400 mb-1">主機名稱或 IP</label>
-                    <input id="new-pi-host" type="text" placeholder="例：192.168.1.102 或 raspberrypi.local" class="w-full px-4 py-2 bg-slate-700 rounded border border-slate-600 text-white placeholder-gray-500">
-                </div>
-                <div>
-                    <label class="block text-sm text-gray-400 mb-1">連接埠</label>
-                    <input id="new-pi-port" type="number" value="5000" class="w-full px-4 py-2 bg-slate-700 rounded border border-slate-600 text-white">
-                </div>
-                <div>
-                    <label class="block text-sm text-gray-400 mb-1">顯示名稱</label>
-                    <input id="new-pi-name" type="text" placeholder="例：樓下客廳" class="w-full px-4 py-2 bg-slate-700 rounded border border-slate-600 text-white placeholder-gray-500">
-                </div>
-            </div>
-
-            <div class="flex gap-3">
-                <button onclick="addNewPi()" class="flex-1 py-2 bg-green-600 hover:bg-green-500 font-semibold rounded transition">
-                    新增
-                </button>
-                <button onclick="closeAddPiModal()" class="flex-1 py-2 bg-gray-600 hover:bg-gray-500 font-semibold rounded transition">
-                    取消
-                </button>
-            </div>
-        </div>
+    <!-- Selected device (rendered by app.js) -->
+    <div class="panel" id="detail">
+      <div class="empty" style="margin:auto">Select a device on the left, or add one.</div>
     </div>
+  </div>
+</div>
 
-    <!-- 訊息通知 -->
-    <div id="toast-container" class="fixed bottom-6 right-6 space-y-2 z-40"></div>
+<!-- Add device -->
+<div class="ov" id="add-ov">
+  <form class="bx" id="add-form" autocomplete="off">
+    <h3>Add device</h3>
+    <label for="f-id">Device ID</label>
+    <input type="text" id="f-id" placeholder="pi-03" maxlength="32" required>
+    <label for="f-host">Host or IP</label>
+    <input type="text" id="f-host" placeholder="192.168.1.102" required>
+    <label for="f-port">Port</label>
+    <input type="number" id="f-port" value="5000" min="1" max="65535">
+    <label for="f-name">Name</label>
+    <input type="text" id="f-name" placeholder="Same as Device ID if empty" maxlength="64">
+    <div class="err" id="add-err"></div>
+    <div class="acts">
+      <button type="button" class="ghost" data-action="close-add">Cancel</button>
+      <button type="submit" class="primary" id="add-submit">Add</button>
+    </div>
+  </form>
+</div>
 
-    <script>
-        // ===== 指令設定：每個指令附上預期的 LED 反應（LED 模擬版韌體，動作燈=D9／狀態燈=D10） =====
-        // timeoutSec 是送給 PC /api/pi/<id>/command 的 timeout 欄位，PC 會原樣轉發給 Pi，
-        // Pi 再轉發給 Arduino 端的等待時間上限。數值刻意抓寬鬆一點，涵蓋未來真機校正/歸位
-        // 可能超過 30 秒的情況；模擬版本身跑得快，實際不會等那麼久。
-        const AXIS_GROUPS = [
-            {
-                title: 'X 軸', range: '行程 0–1000mm',
-                calibrate: { cmd: 'SXC', label: '校正', led: '狀態燈亮 → 動作燈降到全暗再升到 255 → 熄（約 3.8s）', timeoutSec: 40 },
-                home:      { cmd: 'SXH', label: '歸位', led: '狀態燈亮 → 動作燈滑到全暗 → 熄（約 3.8s）', timeoutSec: 40 },
-                position:  { cmd: 'SXP', label: '查詢位置', led: '無變化', timeoutSec: 10 },
-                move:      { prefix: 'SXM', label: '移動', led: '狀態燈亮 → 動作燈滑到 mm/1000×255 → 熄（約 1.9s）；超出行程時無變化', unit: 'mm', min: 0, max: 1000, timeoutSec: 40 }
-            },
-            {
-                title: 'Y 軸', range: '行程 0–1000mm',
-                calibrate: { cmd: 'SYC', label: '校正', led: '狀態燈亮 → 動作燈降到全暗再升到 180 → 熄（約 3.9s）', timeoutSec: 40 },
-                home:      { cmd: 'SYH', label: '歸位', led: '狀態燈亮 → 動作燈滑到全暗 → 熄（約 3.9s）', timeoutSec: 40 },
-                position:  { cmd: 'SYP', label: '查詢位置', led: '無變化', timeoutSec: 10 },
-                move:      { prefix: 'SYM', label: '移動', led: '狀態燈亮 → 動作燈滑到 mm/1000×180 → 熄（約 1.9s）；超出行程時無變化', unit: 'mm', min: 0, max: 1000, timeoutSec: 40 }
-            },
-            {
-                title: 'Z 軸', range: '行程 0–300mm',
-                calibrate: { cmd: 'SZC', label: '校正', led: '狀態燈亮 → 動作燈降到全暗再升到 110 → 熄（約 3.5s）', timeoutSec: 40 },
-                home:      { cmd: 'SZH', label: '歸位', led: '狀態燈亮 → 動作燈滑到全暗 → 熄（約 3.5s）', timeoutSec: 40 },
-                position:  { cmd: 'SZP', label: '查詢位置', led: '無變化', timeoutSec: 10 },
-                move:      { prefix: 'SZM', label: '移動', led: '狀態燈亮 → 動作燈滑到 mm/300×110 → 熄（約 2.0s）；超出行程時無變化', unit: 'mm', min: 0, max: 300, timeoutSec: 40 }
-            }
-        ];
+<!-- Confirm (replaces the blocking window.confirm) -->
+<div class="ov" id="confirm-ov">
+  <div class="bx">
+    <h3 id="confirm-title"></h3>
+    <p id="confirm-text"></p>
+    <div class="acts">
+      <button class="ghost" id="confirm-no">Cancel</button>
+      <button class="danger" id="confirm-yes">OK</button>
+    </div>
+  </div>
+</div>
 
-        const ROTATION_GROUP = {
-            title: '旋轉', range: '−180° ~ 180°',
-            calibrate: { cmd: 'RC', label: '校正', led: '無變化（move_r() 等仍是空 stub）', timeoutSec: 40 },
-            home:      { cmd: 'RH', label: '歸位', led: '無變化（move_r() 等仍是空 stub）', timeoutSec: 40 },
-            position:  { cmd: 'RP', label: '查詢角度', led: '無變化', note: '韌體副作用：查詢時會多觸發一次旋轉歸位，回應會多一行 "Homing rotation"', timeoutSec: 40 },
-            move:      { prefix: 'RM', label: '旋轉', led: '無變化（move_r() 等仍是空 stub）', unit: '度', min: -180, max: 180, timeoutSec: 40 }
-        };
+<div id="toasts"></div>
 
-        const TILT_GROUP = {
-            title: '傾角', range: '0° ~ 90°',
-            position: { cmd: 'TP', label: '查詢傾角', led: '無變化', note: '韌體副作用：會觸發旋轉歸位（不是傾角本身），回應會多一行 "Homing rotation"', timeoutSec: 40 },
-            move:     { prefix: 'TM', label: '傾斜', led: '無變化（TM 目前沒有呼叫 tilt_speaker()，實體不會動）', unit: '度', min: 0, max: 90, timeoutSec: 20 }
-        };
-
-        const LED_TEST_BUTTONS = [
-            { cmd: 'L0', label: 'L0', led: '兩顆全暗' },
-            { cmd: 'L1', label: 'L1', led: '動作燈全亮，狀態燈熄' },
-            { cmd: 'L2', label: 'L2', led: '狀態燈全亮，動作燈熄' },
-            { cmd: 'L3', label: 'L3', led: '兩顆全亮' }
-        ];
-
-        // ===== 全局變數 =====
-        let pis = {};
-        let refreshing = false;
-        let cmdCounter = 0; // 給移動指令的 input 產生不重複 id
-
-        // ===== 初始化 =====
-        async function init() {
-            await loadPis();
-            setInterval(refreshStatus, 5000); // 每 5 秒刷新狀態
-        }
-
-        // ===== API 函數 =====
-        async function loadPis() {
-            try {
-                const resp = await fetch('/api/pis');
-                const data = await resp.json();
-                if (data.status === 'success') {
-                    pis = data.pis;
-                    renderPis();
-                }
-            } catch (err) {
-                showToast('載入裝置列表失敗', 'error');
-            }
-        }
-
-        async function refreshStatus() {
-            if (refreshing) return; // 後端要逐台探測，慢的時候別讓請求越堆越多
-            refreshing = true;
-            try {
-                const resp = await fetch('/api/pis');
-                const data = await resp.json();
-                if (data.status === 'success') {
-                    const changed = Object.keys(data.pis).join() !== Object.keys(pis).join();
-                    pis = data.pis;
-                    // 裝置增減時要重畫（會連帶重置卡片上的輸入框/紀錄），否則只更新狀態燈號
-                    if (changed) renderPis(); else updatePiStatus();
-                }
-            } catch (err) {
-                console.error('刷新狀態失敗', err);
-            } finally {
-                refreshing = false;
-            }
-        }
-
-        /**
-         * 送出一個天車指令並更新該 Pi 卡片的紀錄面板。
-         * 回傳 { ok, result } 讓呼叫端（例如全部歸位的循序流程）可以判斷要不要繼續下一步。
-         */
-        async function runCommand(piId, cmd, ledExpectation, timeoutSec, note) {
-            setCardBusy(piId, true, cmd);
-
-            let outcome = { ok: false };
-            try {
-                const resp = await fetch(`/api/pi/${piId}/command`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ command: cmd, timeout: timeoutSec })
-                });
-                const data = await resp.json();
-
-                if (data.status === 'success') {
-                    const piResp = data.pi_response || {};
-                    // 正常應該是陣列（新版 Pi 端協定），但 Pi 上跑的版本可能還沒更新到那個格式，
-                    // 這時 arduino_response 會是單一字串——正規化成陣列，不管哪種都不會炸。
-                    const rawResponse = piResp.arduino_response;
-                    const lines = Array.isArray(rawResponse) ? rawResponse
-                        : (rawResponse != null && rawResponse !== '' ? [String(rawResponse)] : []);
-                    const result = piResp.arduino_result;
-                    const exceeded = lines.some(l => /exceeded max travel/i.test(l));
-
-                    let badge;
-                    if (result === 'DONE') {
-                        badge = exceeded
-                            ? { text: '⚠️ DONE，但超出行程未實際移動', cls: 'text-amber-400' }
-                            : { text: '✅ DONE', cls: 'text-green-400' };
-                    } else if (result === 'ERR') {
-                        badge = { text: '❌ ERR：韌體看不懂這個指令', cls: 'text-red-400' };
-                    } else if (!result && lines.length) {
-                        badge = { text: '⚠️ 收到回應，但格式跟預期不同（Pi 端可能是舊版）', cls: 'text-amber-400' };
-                    } else {
-                        badge = { text: result || '（無回應內容）', cls: 'text-gray-400' };
-                    }
-
-                    updateLog(piId, cmd, ledExpectation, note, badge, lines);
-                    if (pis[piId]) pis[piId].status = 'online';
-                    outcome = { ok: result === 'DONE' && !exceeded, result, lines };
-                } else {
-                    updateLog(piId, cmd, ledExpectation, note, { text: `🔌 ${data.error || '連線失敗'}`, cls: 'text-red-400' }, []);
-                    refreshStatus();
-                }
-            } catch (err) {
-                updateLog(piId, cmd, ledExpectation, note, { text: `🔌 連線失敗：${err.message}`, cls: 'text-red-400' }, []);
-                refreshStatus();
-            } finally {
-                setCardBusy(piId, false);
-                updatePiCard(piId);
-            }
-
-            return outcome;
-        }
-
-        async function homeOneDevice(piId) {
-            await runCommand(piId, 'SXH', 'X 軸：狀態燈亮 → 動作燈滑到全暗 → 熄', 40);
-            await runCommand(piId, 'SYH', 'Y 軸：狀態燈亮 → 動作燈滑到全暗 → 熄', 40);
-            await runCommand(piId, 'SZH', 'Z 軸：狀態燈亮 → 動作燈滑到全暗 → 熄', 40);
-            await runCommand(piId, 'RH', '旋轉：無變化（move_r() 等仍是空 stub）', 40);
-        }
-
-        async function homeAllDevices() {
-            showToast('開始全部裝置歸位（依序 X→Y→Z→旋轉，裝置間並行）', 'info');
-            await Promise.all(Object.keys(pis).map(piId => homeOneDevice(piId)));
-            showToast('全部裝置歸位流程已送出完畢', 'success');
-        }
-
-        async function testAllDevices() {
-            await Promise.all(Object.keys(pis).map(piId => testPi(piId)));
-        }
-
-        async function testPi(piId) {
-            const button = document.querySelector(`[data-pi-id="${piId}"] .test-btn`);
-            if (button) {
-                button.disabled = true;
-                button.textContent = '⏳ 測試中...';
-            }
-
-            try {
-                const resp = await fetch(`/api/pi/${piId}/test`, { method: 'POST' });
-                const data = await resp.json();
-
-                // 後端會回實際狀態，包含「Flask 通但 Arduino 沒接」
-                pis[piId].status = data.pi_status || 'offline';
-
-                if (data.status === 'success') {
-                    showToast(`${pis[piId].name} 連接成功！`, 'success');
-                } else {
-                    showToast(`${pis[piId].name} 連接失敗: ${data.error || '未知錯誤'}`, 'error');
-                }
-            } catch (err) {
-                pis[piId].status = 'offline';
-                showToast(`測試失敗: ${err.message}`, 'error');
-            } finally {
-                updatePiCard(piId);
-                if (button) {
-                    button.disabled = false;
-                    button.textContent = '✓ 測試連接';
-                }
-            }
-        }
-
-        async function deletePi(piId) {
-            if (confirm(`確定要移除 "${pis[piId].name}" 嗎？`)) {
-                try {
-                    const resp = await fetch(`/api/pi/${piId}`, {
-                        method: 'DELETE'
-                    });
-                    const data = await resp.json();
-
-                    if (data.status === 'success') {
-                        delete pis[piId];
-                        renderPis();
-                        showToast('裝置已移除', 'success');
-                    }
-                } catch (err) {
-                    showToast('移除失敗', 'error');
-                }
-            }
-        }
-
-        async function addNewPi() {
-            const piId = document.getElementById('new-pi-id').value.trim();
-            const host = document.getElementById('new-pi-host').value.trim();
-            const port = parseInt(document.getElementById('new-pi-port').value) || 5000;
-            const name = document.getElementById('new-pi-name').value.trim();
-
-            if (!piId || !host) {
-                showToast('請填入裝置 ID 和主機名稱', 'error');
-                return;
-            }
-
-            try {
-                const resp = await fetch('/api/pi', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        pi_id: piId,
-                        host: host,
-                        port: port,
-                        name: name || piId
-                    })
-                });
-                const data = await resp.json();
-
-                if (data.status === 'success') {
-                    pis[piId] = data.pi;
-                    renderPis();
-                    closeAddPiModal();
-                    showToast(`${data.pi.name} 已新增`, 'success');
-                } else {
-                    showToast(`新增失敗: ${data.error}`, 'error');
-                }
-            } catch (err) {
-                showToast('新增失敗', 'error');
-            }
-        }
-
-        // ===== 指令按鈕的事件處理（統一讀取按鈕上的 data-* 屬性，避免把動態字串塞進 onclick） =====
-        function handleActionClick(btn) {
-            const { piId, cmd, led, timeoutSec, note } = btn.dataset;
-            runCommand(piId, cmd, led, parseFloat(timeoutSec), note || undefined);
-        }
-
-        function handleMoveClick(btn) {
-            const { piId, prefix, led, timeoutSec, inputId, unit } = btn.dataset;
-            const input = document.getElementById(inputId);
-            const value = input.value.trim();
-            if (value === '' || isNaN(Number(value))) {
-                showToast(`請輸入有效的${unit}數值`, 'error');
-                return;
-            }
-            runCommand(piId, `${prefix},${value}`, led, parseFloat(timeoutSec));
-        }
-
-        function handleCustomCommandClick(btn) {
-            const { piId } = btn.dataset;
-            const input = document.getElementById(`custom-cmd-${piId}`);
-            const cmd = input.value.trim();
-            if (!cmd) {
-                showToast('請輸入指令', 'error');
-                return;
-            }
-            runCommand(piId, cmd, '依指令而定，請對照下方分類按鈕旁的 LED 說明', 20);
-        }
-
-        // ===== UI 函數 =====
-        function renderPis() {
-            const container = document.getElementById('pi-container');
-            const emptyState = document.getElementById('empty-state');
-            const globalControls = document.getElementById('global-controls');
-
-            if (Object.keys(pis).length === 0) {
-                container.innerHTML = '';
-                emptyState.classList.remove('hidden');
-                globalControls.classList.add('hidden');
-            } else {
-                emptyState.classList.add('hidden');
-                globalControls.classList.remove('hidden');
-                container.innerHTML = Object.keys(pis)
-                    .map(piId => createPiCard(piId, pis[piId]))
-                    .join('');
-            }
-
-            document.getElementById('pi-count').textContent = Object.keys(pis).length;
-        }
-
-        // 三種狀態：online / no-arduino (Flask 活著但 Arduino 斷線) / offline
-        function statusInfo(status) {
-            if (status === 'online') return { cls: 'status-online', text: '🟢 連接中' };
-            if (status === 'no-arduino') return { cls: 'status-no-arduino', text: '🟡 Arduino 未接' };
-            return { cls: 'status-offline', text: '🔴 離線' };
-        }
-
-        function actionButtonHtml(piId, action) {
-            const noteHtml = action.note
-                ? `<div class="text-[10px] text-amber-400/80 mt-0.5">⚠ ${action.note}</div>`
-                : '';
-            return `
-                <div class="flex items-start gap-2">
-                    <button
-                        class="cmd-btn shrink-0 w-28 py-1.5 px-2 bg-slate-700 hover:bg-cyan-600 text-xs font-semibold rounded transition"
-                        data-pi-id="${piId}" data-cmd="${action.cmd}" data-led="${action.led}"
-                        data-timeout-sec="${action.timeoutSec}" ${action.note ? `data-note="${action.note}"` : ''}
-                        onclick="handleActionClick(this)">
-                        ${action.label} (${action.cmd})
-                    </button>
-                    <div class="text-[11px] text-gray-400 leading-snug pt-1.5">
-                        LED：${action.led}${noteHtml}
-                    </div>
-                </div>`;
-        }
-
-        function moveRowHtml(piId, move) {
-            const inputId = `move-${piId}-${move.prefix}-${cmdCounter++}`;
-            return `
-                <div class="flex items-start gap-2">
-                    <div class="shrink-0 w-28 flex gap-1">
-                        <input id="${inputId}" type="number" min="${move.min}" max="${move.max}" step="any"
-                            placeholder="${move.unit}"
-                            class="w-14 px-1 py-1.5 bg-slate-900 border border-slate-600 rounded text-xs text-white">
-                        <button
-                            class="cmd-btn flex-1 py-1.5 px-1 bg-slate-700 hover:bg-cyan-600 text-xs font-semibold rounded transition"
-                            data-pi-id="${piId}" data-prefix="${move.prefix}" data-led="${move.led}"
-                            data-timeout-sec="${move.timeoutSec}" data-input-id="${inputId}" data-unit="${move.unit}"
-                            onclick="handleMoveClick(this)">
-                            ${move.label}
-                        </button>
-                    </div>
-                    <div class="text-[11px] text-gray-400 leading-snug pt-1.5">
-                        LED：${move.led}
-                    </div>
-                </div>`;
-        }
-
-        function groupHtml(piId, group) {
-            let rows = '';
-            if (group.calibrate) rows += actionButtonHtml(piId, group.calibrate);
-            if (group.home) rows += actionButtonHtml(piId, group.home);
-            if (group.position) rows += actionButtonHtml(piId, group.position);
-            if (group.move) rows += moveRowHtml(piId, group.move);
-
-            return `
-                <div class="bg-slate-900/60 rounded-lg p-3 border border-slate-700">
-                    <div class="flex items-baseline justify-between mb-2">
-                        <h4 class="text-sm font-bold text-cyan-300">${group.title}</h4>
-                        <span class="text-[11px] text-gray-500">${group.range}</span>
-                    </div>
-                    <div class="space-y-2">${rows}</div>
-                </div>`;
-        }
-
-        function ledTestHtml(piId) {
-            const buttons = LED_TEST_BUTTONS.map(b => `
-                <button
-                    class="cmd-btn py-1.5 px-2 bg-slate-700 hover:bg-purple-600 text-xs font-semibold rounded transition"
-                    data-pi-id="${piId}" data-cmd="${b.cmd}" data-led="${b.led}" data-timeout-sec="5"
-                    onclick="handleActionClick(this)" title="LED：${b.led}">
-                    ${b.label}
-                </button>`).join('');
-
-            return `
-                <div class="bg-slate-900/60 rounded-lg p-3 border border-slate-700">
-                    <div class="flex items-baseline justify-between mb-2">
-                        <h4 class="text-sm font-bold text-purple-300">LED 接線測試</h4>
-                        <span class="text-[11px] text-gray-500">僅限模擬版韌體</span>
-                    </div>
-                    <div class="flex gap-2 flex-wrap">${buttons}</div>
-                    <div class="mt-2 text-[11px] text-gray-500 space-y-0.5">
-                        ${LED_TEST_BUTTONS.map(b => `<div>${b.cmd}：${b.led}</div>`).join('')}
-                    </div>
-                </div>`;
-        }
-
-        function createPiCard(piId, piData) {
-            const { cls, text } = statusInfo(piData.status);
-
-            const groupsHtml = [...AXIS_GROUPS, ROTATION_GROUP, TILT_GROUP]
-                .map(g => groupHtml(piId, g))
-                .join('');
-
-            return `
-                <div class="pi-card bg-slate-800 rounded-lg p-6 border border-slate-700" data-pi-id="${piId}">
-                    <!-- 標題欄 -->
-                    <div class="flex justify-between items-start mb-4">
-                        <div>
-                            <h3 class="text-lg font-bold text-cyan-400">${piData.name}</h3>
-                            <p class="text-xs text-gray-500">${piId} • ${piData.host}:${piData.port}</p>
-                        </div>
-                        <span class="status-indicator px-3 py-1 rounded-full text-xs font-semibold ${cls}">
-                            ${text}
-                        </span>
-                    </div>
-
-                    <!-- 指令面板 -->
-                    <div class="grid grid-cols-1 md:grid-cols-2 gap-3 mb-3">
-                        ${groupsHtml}
-                        ${ledTestHtml(piId)}
-                    </div>
-
-                    <!-- 自訂指令 -->
-                    <div class="flex gap-2 mb-3">
-                        <input id="custom-cmd-${piId}" type="text" placeholder="自訂指令，例：?"
-                            class="flex-1 px-3 py-2 bg-slate-900 border border-slate-600 rounded text-sm text-white placeholder-gray-500 font-mono">
-                        <button
-                            class="cmd-btn py-2 px-4 bg-slate-700 hover:bg-cyan-600 text-xs font-semibold rounded transition"
-                            data-pi-id="${piId}" onclick="handleCustomCommandClick(this)">
-                            送出
-                        </button>
-                    </div>
-
-                    <!-- 執行紀錄 -->
-                    <div id="log-${piId}" class="bg-slate-900/80 rounded-lg p-3 border border-slate-700 text-sm mb-4 min-h-[4.5rem]">
-                        <span class="text-gray-500 text-xs">尚未送出任何指令</span>
-                    </div>
-
-                    <!-- 管理按鈕 -->
-                    <div class="grid grid-cols-2 gap-2">
-                        <button onclick="testPi('${piId}')" class="test-btn py-2 px-3 bg-blue-600 hover:bg-blue-500 text-xs font-semibold rounded transition">
-                            ✓ 測試連接
-                        </button>
-                        <button onclick="deletePi('${piId}')" class="py-2 px-3 bg-gray-600 hover:bg-gray-500 text-xs font-semibold rounded transition">
-                            🗑️ 移除
-                        </button>
-                    </div>
-                </div>
-            `;
-        }
-
-        function updatePiStatus() {
-            Object.keys(pis).forEach(piId => {
-                updatePiCard(piId);
-            });
-        }
-
-        function updatePiCard(piId) {
-            const piData = pis[piId];
-            if (!piData) return;
-
-            const statusElement = document.querySelector(`[data-pi-id="${piId}"] .status-indicator`);
-            if (!statusElement) return;
-
-            const { cls, text } = statusInfo(piData.status);
-            // 保留 status-indicator，否則下次就選不到這個元素了
-            statusElement.className = `status-indicator px-3 py-1 rounded-full text-xs font-semibold ${cls}`;
-            statusElement.textContent = text;
-        }
-
-        function setCardBusy(piId, busy, cmd) {
-            const card = document.querySelector(`[data-pi-id="${piId}"]`);
-            if (!card) return;
-            card.querySelectorAll('.cmd-btn').forEach(btn => { btn.disabled = busy; });
-
-            if (busy) {
-                const log = document.getElementById(`log-${piId}`);
-                if (log) {
-                    log.innerHTML = `<span class="text-gray-400 text-xs">⏳ 執行中：<span class="font-mono">${cmd}</span>（指令是阻塞的，天車韌體回 DONE 前不會回應）</span>`;
-                }
-            }
-        }
-
-        function updateLog(piId, cmd, ledExpectation, note, badge, lines) {
-            const log = document.getElementById(`log-${piId}`);
-            if (!log) return;
-
-            const noteHtml = note ? `<div class="text-amber-400/80 text-[11px] mt-1">⚠ ${note}</div>` : '';
-            const linesHtml = lines && lines.length
-                ? `<div class="text-gray-400 text-[11px] mt-1 whitespace-pre-wrap font-mono">${lines.join('\n')}</div>`
-                : '';
-
-            log.innerHTML = `
-                <div class="flex justify-between items-baseline">
-                    <span class="font-mono text-cyan-300">${cmd}</span>
-                    <span class="text-xs font-semibold ${badge.cls}">${badge.text}</span>
-                </div>
-                <div class="text-gray-500 text-[11px] mt-1">預期 LED：${ledExpectation}</div>
-                ${noteHtml}
-                ${linesHtml}
-            `;
-        }
-
-        // ===== Modal 函數 =====
-        function showAddPiModal() {
-            document.getElementById('add-pi-modal').classList.remove('hidden');
-        }
-
-        function closeAddPiModal() {
-            document.getElementById('add-pi-modal').classList.add('hidden');
-            document.getElementById('new-pi-id').value = '';
-            document.getElementById('new-pi-host').value = '';
-            document.getElementById('new-pi-port').value = '5000';
-            document.getElementById('new-pi-name').value = '';
-        }
-
-        // ===== 通知函數 =====
-        function showToast(message, type = 'info') {
-            const container = document.getElementById('toast-container');
-            const bgColor = {
-                'success': 'bg-green-600',
-                'error': 'bg-red-600',
-                'info': 'bg-blue-600'
-            }[type] || 'bg-blue-600';
-
-            const toast = document.createElement('div');
-            toast.className = `${bgColor} px-4 py-3 rounded-lg shadow-lg text-sm font-semibold transition-all`;
-            toast.textContent = message;
-            container.appendChild(toast);
-
-            setTimeout(() => {
-                toast.style.opacity = '0';
-                setTimeout(() => toast.remove(), 300);
-            }, 3000);
-        }
-
-        // ===== 啟動 =====
-        init();
-    </script>
+<script src="{{ url_for('static', filename='app.js') }}?v={{ v }}"></script>
 </body>
 </html>

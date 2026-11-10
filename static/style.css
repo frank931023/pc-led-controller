@@ -1,0 +1,184 @@
+/* Design follows ACQUA-Automation: brand teal + white, status colours only for state.
+   One-page layout: body never scrolls, each panel scrolls inside itself. */
+:root {
+  --brand:#009B85; --brand-dark:#00806E;
+  --brand-soft:#009B850f; --brand-line:#009B8533;
+
+  --bg:#f4f6f6; --panel:#fff; --sunk:#f0f3f3;
+  --line:#e2e8e7; --line-2:#cfd8d7;
+  --fg:#18201f; --muted:#5f6b6a; --faint:#93a09e;
+
+  --ok:#009B85; --fail:#d1493f; --warn:#b7791f;
+  --r:10px; --r-sm:7px; --nav:56px;
+}
+* { box-sizing:border-box; }
+html, body { height:100%; overflow:hidden; }
+body { margin:0; background:var(--bg); color:var(--fg);
+       font:14px/1.5 "Segoe UI",system-ui,-apple-system,sans-serif;
+       -webkit-font-smoothing:antialiased; }
+
+.shell { display:grid; grid-template-columns:var(--nav) 1fr; height:100vh; overflow:hidden; }
+.work  { display:grid; grid-template-columns:300px 1fr; height:100vh;
+         overflow:hidden; padding:14px; gap:14px; }
+
+/* ── Sidebar ── */
+.nav { background:var(--brand); display:flex; flex-direction:column;
+       align-items:center; padding:10px 0; gap:4px; }
+.nav .logo { width:30px; height:30px; border-radius:8px; background:#ffffff26;
+             color:#fff; display:flex; align-items:center; justify-content:center;
+             font-size:13px; font-weight:700; margin-bottom:8px; }
+.nav .sp { flex:1; }
+.nav .st { width:8px; height:8px; border-radius:50%; background:#ffffff70; margin:6px 0; }
+.nav .st.ok { background:#fff; }
+.nav .st.dead { background:#ffd0cb; }
+
+/* ── Panels ── */
+.panel { background:var(--panel); border:1px solid var(--line); border-radius:var(--r);
+         padding:14px 16px; display:flex; flex-direction:column; min-height:0; overflow:hidden; }
+.panel h2 { font-size:10px; margin:0 0 10px; color:var(--faint); font-weight:700;
+            text-transform:uppercase; letter-spacing:.09em; flex:none; }
+.grow { flex:1; min-height:0; overflow-y:auto; }
+.empty { padding:22px 14px; text-align:center; color:var(--faint); font-size:12px; }
+
+/* ── Forms ── */
+label { display:block; font-size:10px; color:var(--muted); margin:10px 0 3px;
+        text-transform:uppercase; letter-spacing:.05em; }
+input, button { font:inherit; }
+input[type=text], input[type=number] {
+  width:100%; padding:6px 9px; border-radius:var(--r-sm);
+  border:1px solid var(--line); background:var(--panel); color:var(--fg);
+  transition:border-color .12s; }
+input:focus { outline:none; border-color:var(--brand); }
+input::placeholder { color:var(--faint); }
+
+button { padding:6px 12px; border-radius:var(--r-sm); border:1px solid var(--line);
+         background:var(--panel); color:var(--fg); cursor:pointer;
+         transition:border-color .12s, background .12s; white-space:nowrap; }
+button:hover:not(:disabled) { border-color:var(--line-2); background:var(--sunk); }
+button:disabled { opacity:.4; cursor:default; }
+button.primary { background:var(--brand); border-color:var(--brand); color:#fff; }
+button.primary:hover:not(:disabled) { background:var(--brand-dark); border-color:var(--brand-dark); }
+button.danger { background:transparent; border-color:#d1493f55; color:var(--fail); }
+button.danger:hover:not(:disabled) { background:#d1493f10; border-color:var(--fail); }
+button.ghost { border-color:transparent; color:var(--muted); background:transparent; }
+button.ghost:hover:not(:disabled) { color:var(--brand); background:var(--brand-soft); }
+
+/* ── Device list ── */
+.top { display:flex; align-items:center; gap:10px; flex:none; margin-bottom:12px; }
+.top h1 { font-size:18px; margin:0; font-weight:650; letter-spacing:-.01em; }
+.top .n { font-size:11px; color:var(--faint); }
+.top .sp { flex:1; }
+
+.dv { display:flex; align-items:center; gap:10px; padding:10px 10px;
+      border-radius:var(--r-sm); border:1px solid transparent; cursor:pointer;
+      transition:background .12s, border-color .12s; }
+.dv:hover { background:var(--sunk); }
+.dv.on { background:var(--brand-soft); border-color:var(--brand-line); }
+.dv .t { flex:1; min-width:0; }
+.dv .t b { display:block; font-size:13px; font-weight:650;
+           white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.dv .t small { display:block; font-size:11px; color:var(--faint);
+               white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+
+.dot { width:7px; height:7px; border-radius:50%; background:var(--faint); flex:none; }
+.dot.online { background:var(--ok); }
+.dot.no-arduino { background:var(--warn); }
+.dot.offline { background:var(--fail); }
+.dot.checking { background:var(--line-2); animation:pulse 1.2s ease-in-out infinite; }
+@keyframes pulse { 50% { opacity:.3; } }
+
+.badge { font-size:10px; color:var(--muted); padding:2px 8px; border-radius:20px;
+         border:1px solid var(--line); white-space:nowrap; }
+.badge.online { color:var(--ok); border-color:var(--brand-line); background:var(--brand-soft); }
+.badge.no-arduino { color:var(--warn); border-color:#b7791f33; }
+.badge.offline { color:var(--fail); border-color:#d1493f33; }
+.badge.checking { color:var(--faint); }
+
+.foot { flex:none; display:flex; flex-direction:column; gap:7px;
+        margin-top:12px; padding-top:12px; border-top:1px solid var(--line); }
+.foot button { width:100%; }
+
+/* ── Device controls ── */
+.head { display:flex; align-items:center; gap:10px; flex:none;
+        padding-bottom:12px; margin-bottom:12px; border-bottom:1px solid var(--line); }
+.head .t { flex:1; min-width:0; }
+.head h1 { font-size:19px; margin:0; font-weight:650; letter-spacing:-.01em;
+           display:inline-flex; align-items:center; gap:7px; cursor:text;
+           border-radius:var(--r-sm); padding:1px 6px; margin-left:-6px;
+           transition:background .12s; }
+.head h1:hover { background:var(--sunk); }
+.head h1 .pen { font-size:13px; color:var(--faint); opacity:0; transition:opacity .12s; }
+.head h1:hover .pen { opacity:1; color:var(--brand); }
+.head input.rn { font-size:19px; font-weight:650; padding:1px 6px; margin-left:-6px;
+                 width:min(360px,100%); }
+.head small { font:11px/1.5 Consolas,"Cascadia Mono",monospace; color:var(--faint); }
+
+.groups { display:grid; grid-template-columns:repeat(auto-fill,minmax(230px,1fr)); gap:10px; }
+.grp { border:1px solid var(--line); border-radius:var(--r-sm); padding:10px 12px; }
+.grp .gh { display:flex; align-items:baseline; justify-content:space-between; margin-bottom:8px; }
+.grp .gh b { font-size:13px; font-weight:650; }
+.grp .gh span { font-size:11px; color:var(--faint); font-variant-numeric:tabular-nums; }
+.grp .btns { display:flex; flex-wrap:wrap; gap:5px; }
+.grp .btns button { flex:1; padding:5px 8px; font-size:12px; }
+.grp .mv { display:flex; gap:5px; margin-top:7px; }
+.grp .mv input { flex:1; min-width:0; padding:5px 8px; font-size:12px;
+                 text-align:right; font-variant-numeric:tabular-nums; }
+.grp .mv button { padding:5px 12px; font-size:12px; }
+
+.custom { display:flex; gap:7px; flex:none; margin-top:12px; }
+.custom input { font-family:Consolas,"Cascadia Mono",monospace; }
+
+/* Command history: newest first, panel has a fixed height so the layout never jumps */
+.hist { flex:none; margin-top:12px; height:170px; overflow-y:auto; background:var(--sunk);
+        border:1px solid var(--line); border-radius:var(--r-sm); font-size:12px; }
+.hist .it { padding:7px 12px; }
+.hist .it + .it { border-top:1px solid var(--line); }
+.hist .lh { display:flex; align-items:baseline; gap:10px; }
+.hist .lh .sp { flex:1; }
+.hist time { font-size:10px; color:var(--faint); font-variant-numeric:tabular-nums; }
+.hist code { font-family:Consolas,"Cascadia Mono",monospace; color:var(--brand); font-weight:600; }
+.hist pre { margin:4px 0 0; font:11px/1.5 Consolas,"Cascadia Mono",monospace;
+            color:var(--muted); white-space:pre-wrap; word-break:break-all; }
+.hist .empty { padding:18px; }
+.res { font-size:11px; font-weight:600; }
+.res.ok { color:var(--ok); } .res.warn { color:var(--warn); }
+.res.fail { color:var(--fail); } .res.idle { color:var(--faint); font-weight:400; }
+
+/* Busy state: the clicked button is highlighted, the rest of that device is disabled */
+button.running { opacity:1 !important; border-color:var(--brand); color:var(--brand);
+                 background:var(--brand-soft); }
+.spin { width:11px; height:11px; border-radius:50%; flex:none;
+        border:2px solid var(--brand-line); border-top-color:var(--brand);
+        animation:spin .8s linear infinite; }
+@keyframes spin { to { transform:rotate(360deg); } }
+
+/* ── Dialog ── */
+.ov { position:fixed; inset:0; z-index:200; display:none; align-items:center;
+      justify-content:center; background:#0a201d66; backdrop-filter:blur(3px); padding:20px; }
+.ov.on { display:flex; }
+.bx { background:var(--panel); border:1px solid var(--line); border-radius:14px;
+      padding:20px 22px; width:min(420px,94vw); box-shadow:0 18px 56px #00302a2e; }
+.bx h3 { margin:0 0 5px; font-size:15px; font-weight:600; }
+.acts { display:flex; gap:7px; margin-top:16px; }
+.acts button { flex:1; }
+.bx p { margin:4px 0 0; font-size:13px; color:var(--muted); line-height:1.6; }
+.bx .err { min-height:18px; margin-top:10px; font-size:12px; color:var(--fail); }
+
+/* ── Toast ── */
+#toasts { position:fixed; right:18px; bottom:18px; z-index:300;
+          display:flex; flex-direction:column; gap:6px; }
+.toast { background:var(--panel); border:1px solid var(--line); border-left:3px solid var(--brand);
+         border-radius:var(--r-sm); padding:9px 14px; font-size:12px;
+         box-shadow:0 8px 26px #00302a1a; transition:opacity .3s; }
+.toast.error { border-left-color:var(--fail); }
+
+::-webkit-scrollbar { width:8px; height:8px; }
+::-webkit-scrollbar-thumb { background:var(--line-2); border-radius:4px; }
+::-webkit-scrollbar-track { background:transparent; }
+
+@media (max-width:860px) {
+  html, body { overflow:auto; }
+  .shell { grid-template-columns:1fr; height:auto; }
+  .nav { display:none; }
+  .work { grid-template-columns:1fr; height:auto; }
+}
