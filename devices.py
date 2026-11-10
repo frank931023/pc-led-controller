@@ -164,4 +164,11 @@ def _clean(device_id, info):
         'port': port,
         'name': str(info.get('name') or device_id).strip(),
         'alternative_name': str(info.get('alternative_name') or '').strip(),
+        # Link to a Beszel system (see beszel_client.BeszelSync):
+        #   ""      not linked yet, auto-match by name allowed
+        #   "none"  user unlinked it on purpose, never auto-match
+        #   other   the Beszel system record id
+        'beszel_system_id': str(info.get('beszel_system_id') or '').strip(),
+        # Name both sides agreed on at the last sync; tells which side renamed since.
+        'beszel_name': str(info.get('beszel_name') or '').strip(),
     }

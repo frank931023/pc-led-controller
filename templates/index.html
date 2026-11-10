@@ -10,6 +10,8 @@
 <div class="shell">
   <nav class="nav">
     <div class="logo">M</div>
+    <a id="nav-beszel" href="#" target="_blank" rel="noopener" title="Open Beszel (Pi health dashboard)" hidden>◔</a>
+    <button class="navb" data-action="open-monitoring" title="Monitoring setup">⚙</button>
     <div class="sp"></div>
     <div class="st" id="nav-dot" title="Server connection"></div>
   </nav>
@@ -41,6 +43,8 @@
 <div class="ov" id="add-ov">
   <form class="bx" id="add-form" autocomplete="off">
     <h3>Add device</h3>
+    <p id="add-agent" hidden>Will be linked to the monitoring agent <b id="add-agent-name"></b>.
+      Enter the Pi's IP address below.</p>
     <label for="f-id">Device ID</label>
     <input type="text" id="f-id" placeholder="pi-03" maxlength="32" required>
     <label for="f-host">Host or IP</label>
@@ -62,10 +66,36 @@
   <div class="bx">
     <h3 id="confirm-title"></h3>
     <p id="confirm-text"></p>
+    <label class="check" id="confirm-check-row" hidden>
+      <input type="checkbox" id="confirm-check"> <span id="confirm-check-label"></span>
+    </label>
     <div class="acts">
       <button class="ghost" id="confirm-no">Cancel</button>
       <button class="danger" id="confirm-yes">OK</button>
     </div>
+  </div>
+</div>
+
+<!-- Monitoring (Beszel agent) setup -->
+<div class="ov" id="mon-ov">
+  <div class="bx wide">
+    <h3>Pi health monitoring</h3>
+    <p id="mon-state">Loading…</p>
+    <div id="mon-body" hidden>
+      <ol>
+        <li>On each Pi, add these lines to the <code>.env</code> of the Pi project
+            (<code>pi-arduino-connection-test-0717</code>):</li>
+      </ol>
+      <div class="envbox"><pre id="mon-env"></pre><button data-action="copy-env">Copy</button></div>
+      <div class="warnline" id="mon-warn" hidden></div>
+      <ol start="2">
+        <li>Make sure <code>PI_ID</code> in that <code>.env</code> is the same as the Device ID here
+            (e.g. <code>pi-01</code>). That is how the Pi is matched to its health data.</li>
+        <li>Run <code>git pull &amp;&amp; docker compose up -d</code> on the Pi.
+            It shows up here within a few seconds.</li>
+      </ol>
+    </div>
+    <div class="acts"><button class="ghost" data-action="close-monitoring">Close</button></div>
   </div>
 </div>
 

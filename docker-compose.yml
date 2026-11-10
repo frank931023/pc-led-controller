@@ -17,6 +17,37 @@ services:
       - CONFIG_FILE=${CONFIG_FILE:-/app/data/pi_config.json}
       # 正式環境務必保持 0：debug 會把 Werkzeug debugger 開放到區域網路
       - FLASK_DEBUG=${FLASK_DEBUG:-0}
+      # Pi 健康狀態：從同一個 compose 裡的 Beszel hub 讀（容器之間用服務名稱連線）
+      - BESZEL_URL=http://beszel:8090
+      - BESZEL_EMAIL=${BESZEL_EMAIL:-admin@example.com}
+      - BESZEL_PASSWORD=${BESZEL_PASSWORD:-}
+      - BESZEL_PORT=${BESZEL_PORT:-8090}
+      - BESZEL_PUBLIC_URL=${BESZEL_PUBLIC_URL:-}
+
+    depends_on:
+      - beszel
+
+  # Beszel hub：Pi 的 CPU / 記憶體 / 溫度監控與歷史圖表（https://github.com/henrygd/beszel）
+  # 每台 Pi 上的 beszel-agent 會主動連進來，hub 不需要連到 Pi。
+  beszel:
+    image: henrygd/beszel:0.21.1
+    container_name: beszel
+    restart: unless-stopped
+    ports:
+      - "${BESZEL_PORT:-8090}:8090"
+    # 帳號、系統清單、歷史資料都在這裡，容器重建不會遺失
+    volumes:
+      - ./beszel_data:/beszel_data
+    environment:
+      # ⚠ 只有 hub「第一次啟動」（beszel_data 還是空的）時會用這組帳密建立管理員。
+      #   之後改 .env 不會改到既有帳號——要改密碼請到 Beszel 網頁上改，再同步改 .env。
+      - USER_EMAIL=${BESZEL_EMAIL:-admin@example.com}
+      - USER_PASSWORD=${BESZEL_PASSWORD:?Set BESZEL_PASSWORD in .env (see .env.example)}
+    healthcheck:
+      test: ["CMD", "/beszel", "health", "--url", "http://localhost:8090"]
+      interval: 60s
+      start_period: 10s
+      timeout: 5s
 
 # 固定子網段，避免 Docker 自動選到跟公司/家裡 LAN 撞網段的範圍（例如這裡曾撞到
 # 172.18.0.0/16，剛好把實體 LAN 上的 172.18.177.0/25 也框進去，導致容器對外連線

@@ -8,6 +8,7 @@ Layout:
   devices.py    device list persistence (data/pi_config.json)
   monitor.py    background status polling + one-command-per-device lock
   pi_client.py  HTTP calls to the Pis
+  beszel_client.py  Pi health from the Beszel hub + two-way sync of the device list
   templates/ + static/   web UI
 """
 
@@ -20,6 +21,7 @@ from flask import Flask, jsonify, render_template, request
 from werkzeug.exceptions import HTTPException
 
 import pi_client
+from beszel_client import UNLINKED, BeszelClient, BeszelError, BeszelSync
 from devices import DeviceExists, DeviceStore, StoreError
 from monitor import StatusMonitor
 
@@ -43,9 +45,16 @@ MAX_NAME = 64
 MAX_COMMAND = 64
 TIMEOUT_RANGE = (1.0, 120.0)                         # seconds a single command may take
 
+# ----- Beszel (optional: leave BESZEL_URL empty to turn health monitoring off) -----
+BESZEL_URL = os.getenv('BESZEL_URL', '')                   # how *this server* reaches the hub
+BESZEL_PORT = int(os.getenv('BESZEL_PORT', '8090'))        # hub port published on the PC
+# How browsers / Pis reach the hub. Empty = same host the browser used for this page.
+BESZEL_PUBLIC_URL = os.getenv('BESZEL_PUBLIC_URL', '').rstrip('/')
+
 app = Flask(__name__)
 store = DeviceStore(CONFIG_FILE, DEFAULT_DEVICES)
 monitor = StatusMonitor(store)
+health = BeszelSync(BeszelClient(BESZEL_URL, os.getenv('BESZEL_EMAIL', ''), os.getenv('BESZEL_PASSWORD', '')), store)
 
 
 # ===== helpers =====
@@ -73,8 +82,16 @@ def json_object():
 BAD_JSON = ('Request body must be a JSON object', 400)
 
 
-def with_status(device_id, device):
-    return {**device, 'status': monitor.status(device_id), 'running': monitor.running(device_id)}
+def with_status(device_id, device, device_health=None):
+    return {**device, 'status': monitor.status(device_id), 'running': monitor.running(device_id),
+            'health': device_health}
+
+
+def beszel_public_url():
+    """Hub URL as seen from the browser's / the Pis' side of the network."""
+    if BESZEL_PUBLIC_URL:
+        return BESZEL_PUBLIC_URL
+    return f'{request.scheme}://{request.host.rsplit(":", 1)[0]}:{BESZEL_PORT}'
 
 
 def validate_device_fields(data):
@@ -108,6 +125,7 @@ def asset_version():
 @app.before_request
 def start_monitor():
     monitor.start()
+    health.start()
 
 
 @app.errorhandler(HTTPException)
@@ -143,7 +161,86 @@ def index():
 def list_pis():
     """All devices with their last known status (from memory, never blocks)."""
     monitor.touch()
-    return ok(pis={i: with_status(i, d) for i, d in store.all().items()})
+    devices = store.all()
+    hp = health.health_by_device(devices)
+    return ok(pis={i: with_status(i, d, hp.get(i)) for i, d in devices.items()},
+              beszel=beszel_summary(devices))
+
+
+def beszel_summary(devices):
+    """Hub state + Beszel systems that belong to no device (for "Add as device" / "Link")."""
+    configured = health.client.configured
+    return {**health.state(),
+            'url': beszel_public_url() if configured else None,
+            'unlinked': health.unlinked(devices) if configured else []}
+
+
+@app.route('/api/beszel', methods=['GET'])
+def beszel_state():
+    """Is health monitoring on, and can we reach the hub?"""
+    return ok(beszel=beszel_summary(store.all()))
+
+
+@app.route('/api/pi/<pi_id>/beszel', methods=['POST'])
+def link_beszel(pi_id):
+    """
+    Link a device to a Beszel system.
+      {"system_id": "<id>"}  link to that system (taken away from any other device)
+      {"system_id": null}    unlink and never auto-match again
+      {"system_id": ""}      unlink and allow auto-matching by name again
+    """
+    data = json_object()
+    if data is None or 'system_id' not in data:
+        return fail('Body must be {"system_id": "<id>" | null | ""}', 400)
+    if store.get(pi_id) is None:
+        return fail('Pi not found', 404)
+
+    sid = data['system_id']
+    if sid is None:
+        sid = UNLINKED
+    elif not isinstance(sid, str):
+        return fail('system_id must be a string or null', 400)
+    elif sid and health.system(sid) is None:
+        return fail('Unknown Beszel system (it may have just been deleted)', 404)
+
+    if sid not in ('', UNLINKED):
+        # One system belongs to one device: release it from whoever had it.
+        for other_id, other in store.all().items():
+            if other_id != pi_id and other['beszel_system_id'] == sid:
+                store.update(other_id, beszel_system_id=UNLINKED, beszel_name='')
+
+    # beszel_name='' makes the next sync push this device's name to the system.
+    device = store.update(pi_id, beszel_system_id=sid, beszel_name='')
+    health.wake()
+    return ok(pi_id=pi_id, pi=with_status(pi_id, device))
+
+
+@app.route('/api/beszel/agent-env', methods=['GET'])
+def beszel_agent_env():
+    """
+    The lines to paste into each Pi's .env so its agent registers with our hub.
+    ⚠ Contains the registration token: anyone with it can add systems to the hub.
+    (This service has no login at all, so it is no more exposed than the controls.)
+    """
+    if not health.client.configured:
+        return fail('Beszel is not configured (BESZEL_URL is empty)', 400)
+    try:
+        settings = health.client.agent_settings()
+    except BeszelError as e:
+        return fail(str(e), 502)
+
+    hub_url = beszel_public_url()
+    warning = None
+    if re.search(r'//(localhost|127\.|\[?::1)', hub_url):
+        warning = ('This page was opened via localhost, so HUB_URL points to the Pi itself. '
+                   "Open this page using the PC's LAN IP, or set BESZEL_PUBLIC_URL in .env.")
+    env = '\n'.join([
+        'COMPOSE_PROFILES=monitoring',
+        f'BESZEL_HUB_URL={hub_url}',
+        f'BESZEL_KEY="{settings["key"]}"',
+        f'BESZEL_TOKEN={settings["token"]}',
+    ])
+    return ok(env=env, hub_url=hub_url, warning=warning)
 
 
 @app.route('/api/pi/<pi_id>', methods=['GET'])
@@ -171,6 +268,15 @@ def add_pi():
     if error:
         return fail(error, 400)
 
+    # Optional: link straight to a Beszel system ("Add as device" from an unlinked agent).
+    sid = str(data.get('beszel_system_id') or '').strip()
+    if sid:
+        if health.system(sid) is None:
+            return fail('Unknown Beszel system (it may have just been deleted)', 400)
+        if any(d['beszel_system_id'] == sid for d in store.all().values()):
+            return fail('That Beszel system is already linked to another device', 400)
+        fields['beszel_system_id'] = sid
+
     try:
         device = store.add(pi_id, fields)
     except DeviceExists:
@@ -178,6 +284,7 @@ def add_pi():
 
     # Don't make the user wait for the probe; the UI shows "Checking" until it lands.
     monitor.check_soon(pi_id)
+    health.wake()
     return ok(message=f"Pi '{pi_id}' added", pi_id=pi_id, pi=with_status(pi_id, device))
 
 
@@ -197,17 +304,37 @@ def update_pi(pi_id):
     device = store.update(pi_id, alternative_name=alt)
     if device is None:
         return fail('Pi not found', 404)
+    health.wake()   # push the new name to the linked Beszel system right away
     return ok(pi_id=pi_id, pi=with_status(pi_id, device))
 
 
 @app.route('/api/pi/<pi_id>', methods=['DELETE'])
 def delete_pi(pi_id):
+    """
+    Remove a device. ?beszel=1 also deletes its linked Beszel system (and its history).
+    ⚠ If that Pi's agent is still running it registers again a few seconds later and
+    shows up under "Unlinked agents"; stop the agent on the Pi to remove it for good.
+    """
     if monitor.running(pi_id):
         return fail('A command is still running on this device', 409)
-    if not store.remove(pi_id):
+    device = store.get(pi_id)
+    if device is None:
         return fail('Pi not found', 404)
+
+    beszel_deleted = False
+    sid = device['beszel_system_id']
+    if request.args.get('beszel') == '1' and sid not in ('', UNLINKED):
+        # Beszel first: if it fails, nothing is deleted and the user can retry or untick.
+        try:
+            health.client.delete_system(sid)
+            beszel_deleted = True
+        except BeszelError as e:
+            return fail(f'Device not removed: could not delete it from Beszel ({e})', 502)
+
+    store.remove(pi_id)
     monitor.forget(pi_id)
-    return ok(message=f"Pi '{pi_id}' deleted")
+    health.wake()
+    return ok(message=f"Pi '{pi_id}' deleted", beszel_deleted=beszel_deleted)
 
 
 @app.route('/api/pi/<pi_id>/test', methods=['GET', 'POST'])

@@ -182,3 +182,57 @@ button.running { opacity:1 !important; border-color:var(--brand); color:var(--br
   .nav { display:none; }
   .work { grid-template-columns:1fr; height:auto; }
 }
+
+/* ── Pi health (from Beszel) ── */
+.dv .t small.hl { color:var(--muted); font-variant-numeric:tabular-nums; }
+.health { flex:none; margin-bottom:12px; }
+.hgrid { display:grid; grid-template-columns:repeat(auto-fill,minmax(92px,1fr)); gap:7px; }
+.tile { padding:7px 8px; border:1px solid var(--line); border-radius:var(--r-sm); text-align:center;
+        font-size:10px; color:var(--muted); text-transform:uppercase; letter-spacing:.05em; }
+.tile b { display:block; font-size:15px; color:var(--fg); letter-spacing:0;
+          font-variant-numeric:tabular-nums; text-transform:none; font-weight:600; }
+.tile.warn b { color:var(--warn); }
+.tile.fail b { color:var(--fail); }
+.tile.ok b { color:var(--ok); }
+.hnote { display:flex; align-items:center; gap:10px; padding:9px 12px; font-size:12px;
+         color:var(--muted); border:1px dashed var(--line-2); border-radius:var(--r-sm); }
+.hnote .sp { flex:1; }
+.health h2 { display:flex; align-items:center; gap:8px; }
+.health h2 a { margin-left:auto; text-transform:none; letter-spacing:0; font-size:11px;
+               font-weight:600; color:var(--brand); text-decoration:none; }
+.health h2 a:hover { text-decoration:underline; }
+
+/* sidebar icon buttons */
+.nav a, .nav button.navb { width:38px; height:38px; border-radius:9px; border:none; background:transparent;
+        color:#ffffffb0; cursor:pointer; display:flex; align-items:center; justify-content:center;
+        font-size:16px; text-decoration:none; transition:background .12s, color .12s; padding:0; }
+.nav a:hover, .nav button.navb:hover { background:#ffffff24; color:#fff; }
+
+/* monitoring setup dialog */
+.bx.wide { width:min(620px,94vw); }
+.bx ol { margin:10px 0 0; padding-left:20px; font-size:13px; color:var(--muted); line-height:1.7; }
+.bx ol code, .bx p code { font-family:Consolas,"Cascadia Mono",monospace; font-size:12px;
+        background:var(--sunk); padding:1px 5px; border-radius:4px; color:var(--fg); }
+.envbox { position:relative; margin-top:8px; }
+.envbox pre { margin:0; padding:10px 12px; background:var(--sunk); border:1px solid var(--line);
+              border-radius:var(--r-sm); font:12px/1.6 Consolas,"Cascadia Mono",monospace;
+              white-space:pre-wrap; word-break:break-all; min-height:90px; }
+.envbox button { position:absolute; top:6px; right:6px; padding:3px 10px; font-size:11px; }
+.bx .warnline { margin-top:10px; font-size:12px; color:var(--warn); }
+.bx p a { color:var(--brand); }
+
+/* ── Beszel link / unlinked agents ── */
+.health h2 .hlinks { margin-left:auto; display:flex; gap:12px; }
+.health h2 .hlinks a { margin-left:0; }
+.hnote select { width:auto; max-width:220px; padding:5px 8px; border-radius:var(--r-sm);
+                border:1px solid var(--line); background:var(--panel); color:var(--fg); font:inherit; font-size:12px; }
+.unl { margin-top:14px; padding-top:12px; border-top:1px solid var(--line); }
+.unl h2 { display:flex; align-items:center; gap:6px; }
+.unl h2 .n { font-size:10px; color:var(--faint); letter-spacing:0; }
+.dv.static { cursor:default; }
+.dv.static:hover { background:transparent; }
+button.sm { padding:3px 10px; font-size:11px; }
+.hint { font-size:11px; color:var(--faint); margin:6px 0 0; line-height:1.5; }
+label.check { display:flex; align-items:center; gap:7px; margin:12px 0 0; font-size:12px;
+              color:var(--fg); text-transform:none; letter-spacing:0; cursor:pointer; }
+label.check input { width:auto; margin:0; accent-color:var(--fail); }

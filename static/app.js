@@ -57,6 +57,7 @@ const state = {
   running: {},        // id -> { cmd, startedAt } for commands started from this tab
   renaming: false,
   serverUp: true,
+  beszel: null,       // { enabled, connected, error, url } from /api/beszel
   refreshing: false,
 };
 
@@ -122,18 +123,24 @@ function toast(msg, type = 'info') {
   setTimeout(() => { t.style.opacity = '0'; setTimeout(() => t.remove(), 300); }, type === 'error' ? 5000 : 3000);
 }
 
-/** In-page replacement for window.confirm. Resolves true/false. */
-function confirmDialog(title, text, okLabel = 'OK') {
+/**
+ * In-page replacement for window.confirm. Resolves true/false, or { ok, checked }
+ * when a checkbox label is given.
+ */
+function confirmDialog(title, text, okLabel = 'OK', checkboxLabel = null) {
   return new Promise((resolve) => {
     const ov = $('#confirm-ov');
     $('#confirm-title').textContent = title;
     $('#confirm-text').textContent = text;
     $('#confirm-yes').textContent = okLabel;
+    $('#confirm-check-row').hidden = !checkboxLabel;
+    $('#confirm-check').checked = false;
+    $('#confirm-check-label').textContent = checkboxLabel || '';
     const done = (answer) => {
       ov.classList.remove('on');
       $('#confirm-yes').onclick = $('#confirm-no').onclick = null;
       ov.cancel = null;
-      resolve(answer);
+      resolve(checkboxLabel ? { ok: answer, checked: answer && $('#confirm-check').checked } : answer);
     };
     $('#confirm-yes').onclick = () => done(true);
     $('#confirm-no').onclick = () => done(false);
@@ -162,10 +169,30 @@ function renderList() {
         <div class="t">
           <b>${esc(label(id))}</b>
           <small>${esc(d.host)}:${esc(d.port)}</small>
+          ${healthLine(d.health)}
         </div>
         <span class="badge ${s}">${STATUS_TEXT[s]}</span>
       </div>`;
-  }).join('');
+  }).join('') + unlinkedHtml();
+}
+
+/** Beszel agents that belong to no device, listed under the devices. */
+function unlinkedHtml() {
+  const list = (state.beszel && state.beszel.unlinked) || [];
+  if (!list.length) return '';
+  return `
+    <div class="unl">
+      <h2>Unlinked agents <span class="n">${list.length}</span></h2>
+      ${list.map((u) => `
+        <div class="dv static">
+          <span class="dot ${u.status === 'up' ? 'online' : 'offline'}"></span>
+          <div class="t"><b>${esc(u.name)}</b><small>Beszel agent · ${esc(u.status)}</small></div>
+          <button class="ghost sm" data-action="add-from-agent" data-sid="${esc(u.system_id)}"
+            data-name="${esc(u.name)}" title="Create a device linked to this agent">Add</button>
+        </div>`).join('')}
+      <p class="hint">Agents reporting to Beszel that no device is linked to. Add one as a device,
+        or link it from a device's Health section.</p>
+    </div>`;
 }
 
 function groupHtml(g) {
@@ -203,6 +230,7 @@ function renderDetail() {
       <button id="d-test" data-action="test">Test</button>
       <button class="danger" id="d-remove" data-action="remove">Remove</button>
     </div>
+    <div class="health" id="health"></div>
     <h2>Controls</h2>
     <div class="grow"><div class="groups">${GROUPS.map(groupHtml).join('')}</div></div>
     <div class="custom">
@@ -211,6 +239,7 @@ function renderDetail() {
     </div>
     <div class="hist" id="hist"></div>`;
   updateHeader();
+  renderHealth();
   renderHistory();
   renderBusy();
 }
@@ -277,6 +306,121 @@ function setServerUp(up) {
   toast(up ? 'Connection to the control server restored' : 'Lost connection to the control server', up ? 'info' : 'error');
 }
 
+// ===== Pi health (Beszel) =====
+
+const pct = (v) => (v == null ? '–' : `${Math.round(v)}%`);
+const level = (v, warn, bad) => (v == null ? '' : v >= bad ? 'fail' : v >= warn ? 'warn' : '');
+
+function fmtUptime(sec) {
+  if (sec == null) return '–';
+  const d = Math.floor(sec / 86400), h = Math.floor((sec % 86400) / 3600), m = Math.floor((sec % 3600) / 60);
+  return d ? `${d}d ${h}h` : h ? `${h}h ${m}m` : `${m}m`;
+}
+
+/** One short line under the device in the list, e.g. "CPU 12% · 48°C". */
+function healthLine(h) {
+  if (!h) return '';
+  if (h.status !== 'up') return `<small class="hl">Agent ${esc(h.status)}</small>`;
+  const parts = [`CPU ${pct(h.cpu)}`];
+  if (h.temp != null) parts.push(`${Math.round(h.temp)}°C`);
+  return `<small class="hl">${parts.join(' · ')}</small>`;
+}
+
+function renderHealth() {
+  const el = $('#health');
+  if (!el) return;
+  const b = state.beszel;
+  if (!b || !b.enabled) { el.innerHTML = ''; return; }   // monitoring turned off: no section at all
+
+  const d = state.devices[state.selected];
+  const h = d && d.health;
+  const chart = h && b.url
+    ? `<a href="${esc(b.url)}/system/${encodeURIComponent(h.system_id)}" target="_blank" rel="noopener">Charts in Beszel ↗</a>` : '';
+  const links = h
+    ? `<span class="hlinks">${chart}<a href="#" data-action="unlink" title="Stop showing this agent's data for this device">Unlink</a></span>` : '';
+
+  let body;
+  if (!b.connected) {
+    body = `<div class="hnote">Beszel hub not reachable${b.error ? ` — ${esc(b.error)}` : ''}</div>`;
+  } else if (!h) {
+    const free = b.unlinked || [];
+    const off = d && d.beszel_system_id === 'none';
+    const options = free.map((u) => `<option value="${esc(u.system_id)}">${esc(u.name)} (${esc(u.status)})</option>`).join('');
+    const picker = free.length
+      ? `<select id="link-sid">${options}</select><button class="primary" data-action="link">Link</button>` : '';
+    const auto = off
+      ? '<button data-action="auto-link" title="Link automatically when an agent with this Device ID connects">Auto-link</button>' : '';
+    body = `<div class="hnote">${off ? 'Not linked to a monitoring agent.' : 'No monitoring agent found for this Pi.'}
+              <span class="sp"></span>${picker}${auto}
+              <button data-action="open-monitoring">Set up</button></div>`;
+  } else {
+    const agentCls = h.status === 'up' ? 'ok' : h.status === 'down' ? 'fail' : 'warn';
+    // ⚠ When the agent is down these are the last values received, not live ones.
+    const tiles = [
+      ['Agent', h.status === 'up' ? 'Up' : h.status, agentCls],
+      ['CPU', pct(h.cpu), level(h.cpu, 80, 95)],
+      ['Memory', pct(h.mem), level(h.mem, 85, 95)],
+      ['Disk', pct(h.disk), level(h.disk, 85, 95)],
+      ['Temp', h.temp == null ? '–' : `${Math.round(h.temp)}°C`, level(h.temp, 70, 80)],
+      ['Load', h.load == null ? '–' : h.load.toFixed(2), ''],
+      ['Uptime', fmtUptime(h.uptime), ''],
+    ];
+    body = `<div class="hgrid">${tiles.map(([k, v, c]) =>
+      `<div class="tile ${c}"><b>${esc(v)}</b>${k}</div>`).join('')}</div>`;
+  }
+  const html = `<h2>Health ${links}</h2>${body}`;
+  // Only touch the DOM when something changed, so an open <select> isn't reset every 5 s.
+  if (el.dataset.html !== html) { el.innerHTML = html; el.dataset.html = html; }
+}
+
+async function linkSystem(id, systemId, okMsg) {
+  const res = await api('POST', `/api/pi/${encodeURIComponent(id)}/beszel`, { system_id: systemId });
+  if (!res.ok) { toast(`Link failed: ${res.error}`, 'error'); return; }
+  toast(okMsg);
+  refresh();
+  // The server syncs names right away; refresh again once that has landed.
+  setTimeout(refresh, 1500);
+}
+
+function applyBeszel(beszel) {
+  state.beszel = beszel || null;
+  const nav = $('#nav-beszel');
+  nav.hidden = !(state.beszel && state.beszel.enabled && state.beszel.url);
+  if (state.beszel && state.beszel.url) nav.href = state.beszel.url;
+}
+
+async function openMonitoring() {
+  $('#mon-ov').classList.add('on');
+  $('#mon-body').hidden = true;
+  $('#mon-state').textContent = 'Loading…';
+  const res = await api('GET', '/api/beszel/agent-env', null, 15000);
+  if (!res.ok) { $('#mon-state').textContent = `Cannot get the agent settings: ${res.error}`; return; }
+  $('#mon-state').innerHTML = 'Each Pi runs a small Beszel agent that reports CPU, memory, disk and temperature '
+    + `to the hub on this PC (<a href="${esc(res.data.hub_url)}" target="_blank" rel="noopener">${esc(res.data.hub_url)}</a>).`;
+  $('#mon-env').textContent = res.data.env;
+  $('#mon-warn').hidden = !res.data.warning;
+  $('#mon-warn').textContent = res.data.warning || '';
+  $('#mon-body').hidden = false;
+}
+
+function closeMonitoring() { $('#mon-ov').classList.remove('on'); }
+
+async function copyEnv() {
+  const text = $('#mon-env').textContent;
+  try {
+    await navigator.clipboard.writeText(text);
+    toast('Copied');
+  } catch {
+    // Clipboard API needs https or localhost; fall back to selecting the text.
+    const range = document.createRange();
+    range.selectNodeContents($('#mon-env'));
+    const sel = window.getSelection();
+    sel.removeAllRanges();
+    sel.addRange(range);
+    toast('Press Ctrl+C to copy');
+  }
+}
+
 // ===== History =====
 
 function pushHistory(id, entry) {
@@ -321,6 +465,7 @@ async function refresh() {
   setServerUp(true);
 
   state.devices = res.data.pis || {};
+  applyBeszel(res.data.beszel);
 
   if (!state.devices[state.selected]) {
     state.selected = Object.keys(state.devices)[0] || null;
@@ -330,6 +475,7 @@ async function refresh() {
   }
   renderList();
   updateHeader();
+  renderHealth();
   renderBusy();
 }
 
@@ -428,17 +574,22 @@ async function testAll() {
 }
 
 async function removeDevice(id) {
-  const yes = await confirmDialog(`Remove ${label(id)}?`,
-    `${id} (${state.devices[id].host}) will be removed from this list. The Pi itself is not changed.`, 'Remove');
-  if (!yes) return;
-  const res = await api('DELETE', `/api/pi/${encodeURIComponent(id)}`);
+  const d = state.devices[id];
+  const linked = !!d.health;
+  const text = `${id} (${d.host}) will be removed from this list. The Pi itself is not changed.`
+    + (linked ? ' If its monitoring agent keeps running, it registers again and shows up under "Unlinked agents".' : '');
+  const answer = await confirmDialog(`Remove ${label(id)}?`, text, 'Remove',
+    linked ? 'Also remove it from Beszel (deletes its history)' : null);
+  if (!(linked ? answer.ok : answer)) return;
+  const alsoBeszel = linked && answer.checked;
+  const res = await api('DELETE', `/api/pi/${encodeURIComponent(id)}${alsoBeszel ? '?beszel=1' : ''}`);
   if (!res.ok) { toast(`Remove failed: ${res.error}`, 'error'); return; }
   delete state.devices[id];
   delete state.history[id];
   if (state.selected === id) state.selected = Object.keys(state.devices)[0] || null;
   renderList();
   renderDetail();
-  toast('Device removed');
+  toast(res.data.beszel_deleted ? 'Device removed here and from Beszel' : 'Device removed');
 }
 
 function startRename() {
@@ -490,15 +641,27 @@ function startRename() {
 
 // ----- add dialog -----
 
-function openAdd() {
+/** Open the add dialog; `agent` = { sid, name } when adding from an unlinked Beszel agent. */
+function openAdd(agent = null) {
   $('#add-err').textContent = '';
+  $('#add-form').dataset.sid = agent ? agent.sid : '';
+  $('#add-agent').hidden = !agent;
+  if (agent) {
+    $('#add-agent-name').textContent = agent.name;
+    // The agent name is the Pi's PI_ID, which should also be the Device ID.
+    const id = agent.name.replace(/[^A-Za-z0-9_.-]/g, '-').slice(0, 32);
+    $('#f-id').value = id;
+    $('#f-name').value = id;
+  }
   $('#add-ov').classList.add('on');
-  $('#f-id').focus();
+  (agent ? $('#f-host') : $('#f-id')).focus();
 }
 
 function closeAdd() {
   $('#add-ov').classList.remove('on');
   $('#add-form').reset();
+  $('#add-form').dataset.sid = '';
+  $('#add-agent').hidden = true;
 }
 
 async function submitAdd(e) {
@@ -517,7 +680,8 @@ async function submitAdd(e) {
   const submit = $('#add-submit');
   submit.disabled = true;
   submit.textContent = 'Adding…';
-  const res = await api('POST', '/api/pi', { pi_id, host, port, name });
+  const beszel_system_id = $('#add-form').dataset.sid || '';
+  const res = await api('POST', '/api/pi', { pi_id, host, port, name, beszel_system_id });
   submit.disabled = false;
   submit.textContent = 'Add';
 
@@ -536,6 +700,7 @@ document.addEventListener('click', (e) => {
   const overlay = e.target.classList && e.target.classList.contains('ov') ? e.target : null;
   if (overlay) {                                   // click on the dimmed backdrop
     if (overlay.id === 'add-ov') closeAdd();
+    if (overlay.id === 'mon-ov') closeMonitoring();
     if (overlay.id === 'confirm-ov' && overlay.cancel) overlay.cancel();
     return;
   }
@@ -576,6 +741,20 @@ document.addEventListener('click', (e) => {
     case 'close-add': closeAdd(); break;
     case 'home-all': homeAll(); break;
     case 'test-all': testAll(); break;
+    case 'open-monitoring': openMonitoring(); break;
+    case 'close-monitoring': closeMonitoring(); break;
+    case 'copy-env': copyEnv(); break;
+    case 'add-from-agent': openAdd({ sid: el.dataset.sid, name: el.dataset.name }); break;
+    case 'link': {
+      const sel = $('#link-sid');
+      if (sel && sel.value) linkSystem(state.selected, sel.value, 'Linked to the monitoring agent');
+      break;
+    }
+    case 'unlink':
+      e.preventDefault();
+      linkSystem(state.selected, null, 'Unlinked. Use Link to connect it again.');
+      break;
+    case 'auto-link': linkSystem(state.selected, '', 'Auto-link on'); break;
   }
 });
 
@@ -590,6 +769,7 @@ document.addEventListener('keydown', (e) => {
     const confirmOv = $('#confirm-ov');
     if (confirmOv.classList.contains('on') && confirmOv.cancel) confirmOv.cancel();
     else if ($('#add-ov').classList.contains('on')) closeAdd();
+    else if ($('#mon-ov').classList.contains('on')) closeMonitoring();
   }
 });
 
@@ -601,5 +781,6 @@ document.addEventListener('visibilitychange', () => { if (!document.hidden) refr
 // ===== Start =====
 
 refresh();
+if (location.hash === '#monitoring') openMonitoring();   // shareable link to the setup steps
 setInterval(() => { if (!document.hidden) refresh(); }, POLL_MS);
 setInterval(tickElapsed, 1000);
