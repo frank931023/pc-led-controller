@@ -17,7 +17,7 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 
-import pi_client
+from . import pi_client
 
 log = logging.getLogger(__name__)
 

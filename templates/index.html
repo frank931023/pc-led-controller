@@ -4,18 +4,35 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Motion Control</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%23009B85'/%3E%3Ctext x='16' y='22' font-family='Segoe UI,sans-serif' font-size='17' font-weight='700' fill='white' text-anchor='middle'%3EM%3C/text%3E%3C/svg%3E">
 <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}?v={{ v }}">
 </head>
 <body>
 <div class="shell">
   <nav class="nav">
     <div class="logo">M</div>
-    <button class="navb" data-action="open-monitoring" title="Monitoring setup">⚙</button>
+    <button class="navb on" data-action="view" data-view="devices" id="nav-devices" title="Devices and controls">▦</button>
+    <button class="navb" data-action="view" data-view="monitoring" id="nav-monitoring" title="Monitoring: health of every Pi">◔<span class="nbadge" id="nav-alerts" hidden></span></button>
+    <button class="navb" data-action="open-monitoring" title="Set up monitoring agents on the Pis">⚙</button>
     <div class="sp"></div>
     <div class="st" id="nav-dot" title="Server connection"></div>
   </nav>
 
-  <div class="work">
+  <!-- Monitoring view (health of every Pi; rendered by app.js) -->
+  <div class="work single" id="mon-view" hidden>
+    <div class="panel">
+      <div class="top">
+        <h1>Monitoring</h1>
+        <span class="n" id="mon-sub"></span>
+        <span class="sp"></span>
+        <button data-action="open-rules">Alert rules</button>
+        <button data-action="open-monitoring">Set up agents</button>
+      </div>
+      <div class="grow" id="mon-body-view"><div class="empty">Loading…</div></div>
+    </div>
+  </div>
+
+  <div class="work" id="dev-view">
     <!-- Device list -->
     <div class="panel">
       <div class="top">
@@ -26,7 +43,8 @@
       </div>
       <div class="grow" id="list"><div class="empty">Loading…</div></div>
       <div class="foot">
-        <button id="btn-home-all" data-action="home-all">Home all devices</button>
+        <button id="btn-home-all" data-action="home-all"
+          title="Every device: home all axes (SXH → SYH → SZH → RH), then move to its parking position if one is set">Home all devices</button>
         <button id="btn-test-all" data-action="test-all">Test all connections</button>
       </div>
     </div>
@@ -126,8 +144,54 @@
   </div>
 </div>
 
+<!-- Containers on one Pi -->
+<div class="ov" id="cont-ov">
+  <div class="bx xl">
+    <h3 id="cont-title">Containers</h3>
+    <p id="cont-state"></p>
+    <div class="tablewrap"><table class="tbl" id="cont-table"></table></div>
+    <div class="acts"><button class="ghost" data-action="close-containers">Close</button></div>
+  </div>
+</div>
+
+<!-- Alert rules -->
+<div class="ov" id="rules-ov">
+  <form class="bx wide" id="rules-form" autocomplete="off">
+    <h3>Alert rules</h3>
+    <p>An alert fires when a condition holds for about 20 seconds, and shows on the Monitoring page.
+       With a webhook URL it is also posted to Teams / Slack.</p>
+    <div class="rules" id="rules-rows"></div>
+    <label for="rules-webhook">Webhook URL (optional)</label>
+    <input type="text" id="rules-webhook" placeholder="https://… (Teams or Slack incoming webhook)">
+    <div class="err" id="rules-err"></div>
+    <div class="acts">
+      <button type="button" class="ghost" data-action="close-rules">Cancel</button>
+      <button type="button" id="rules-test" data-action="test-webhook">Send test</button>
+      <button type="submit" class="primary" id="rules-save">Save</button>
+    </div>
+  </form>
+</div>
+
+<!-- Parking position of one device -->
+<div class="ov" id="park-ov">
+  <form class="bx" id="park-form" autocomplete="off">
+    <h3 id="park-title">Parking position</h3>
+    <p>After <b>Home</b>, the device moves to these positions. Leave an axis empty to keep it at home.</p>
+    <div id="park-rows"></div>
+    <div class="err" id="park-err"></div>
+    <div class="acts">
+      <button type="button" class="ghost" data-action="close-park">Cancel</button>
+      <button type="button" data-action="clear-park">Clear all</button>
+      <button type="submit" class="primary" id="park-save">Save</button>
+    </div>
+  </form>
+</div>
+
 <div id="toasts"></div>
 
-<script src="{{ url_for('static', filename='app.js') }}?v={{ v }}"></script>
+<!-- Plain scripts sharing one global scope, in dependency order (see the header of core.js) -->
+{% for name in ['core', 'devices', 'health', 'charts', 'monitoring', 'park', 'main'] %}
+<script src="{{ url_for('static', filename='js/' ~ name ~ '.js') }}?v={{ v }}"></script>
+{% endfor %}
 </body>
 </html>

@@ -25,10 +25,11 @@
 ```
 PC (Windows / Linux / Mac) ── docker compose up -d 一次啟動兩個容器
 ├── Motion Control Center (Flask, port 5001)   ← 這個專案
-│     ├── 網頁介面
+│     ├── 網頁介面（Devices 頁 + Monitoring 頁）
 │     ├── REST API
-│     └── 背景狀態輪詢（每 5 秒）
-└── Beszel hub (port 8090)                     ← Pi 健康監控與歷史圖表
+│     ├── 背景狀態輪詢（每 5 秒）
+│     └── 背景健康同步 + 告警（每 10 秒）
+└── Beszel hub (port 8090)                     ← 健康資料的收集與儲存（不需要打開它的網頁）
           │ HTTP（控制指令）                          ▲ WebSocket（agent 主動連進來）
           ├──────► Raspberry Pi #1 (Flask, port 5000) ──Serial──► Arduino
           │          └── beszel-agent（選用）─────────┘
@@ -37,22 +38,43 @@ PC (Windows / Linux / Mac) ── docker compose up -d 一次啟動兩個容器
 ```
 
 - 控制指令：PC → Pi（HTTP）→ Arduino（Serial）。Pi 端程式在 `../pi-arduino-connection-test-0717/`。
-- 健康資料：每台 Pi 的 beszel-agent **主動**連到 PC 上的 hub，控制中心再從 hub 讀取。
+- 健康資料：每台 Pi 的 beszel-agent **主動**連到 PC 上的 hub，控制中心再從 hub 讀取，
+  所有畫面（數值、圖表、容器、告警）都在控制中心裡，用同一套風格，不用登入或切換到 Beszel。
 
 ### 程式結構
 
 ```
-app.py              HTTP 路由 + 輸入驗證
-devices.py          裝置清單存取（data/pi_config.json：原子寫入、偵測手動修改、壞檔保護）
-monitor.py          背景狀態輪詢 + 「每台裝置同時只跑一個指令」的鎖
-pi_client.py        呼叫 Pi 的 HTTP（錯誤統一轉成 PiError，附帶這個錯誤代表的裝置狀態）
-beszel_client.py    Beszel：讀健康資料、與裝置清單雙向同步（背景每 10 秒）、產生 Pi agent 設定
-templates/index.html  頁面骨架
-static/style.css      樣式（沿用 ACQUA-Automation 的設計：主色 #009B85 + 白）
-static/app.js         前端邏輯（非阻塞 UI）；按鈕從每台 Pi 的指令表產生
-tests/                pytest（不需要 Pi 或 Beszel）
-deploy/ansible/       一次部署所有 Pi 並註冊到這裡（見下方「用 Ansible 部署多台 Pi」）
-docker-compose.yml    控制中心 + Beszel hub
+app.py                  進入點（Docker 用 gunicorn app:app；開發用 python app.py）
+mcc/                    應用程式本體
+  __init__.py             create_app()：建立 Flask app、註冊路由、API token 檢查、錯誤處理
+  config.py               所有環境變數設定（.env）集中在這裡
+  services.py             所有路由共用的長駐物件（裝置清單、狀態監控、健康同步、告警）
+  devices.py              裝置清單 data/pi_config.json（偵測手動修改、壞檔保護、停車位置）
+  monitor.py              背景狀態輪詢 + 「每台裝置同時只跑一個指令」的鎖
+  pi_client.py            呼叫 Pi 的 HTTP（錯誤統一轉成 PiError，附帶它代表的裝置狀態）
+  beszel.py               Beszel：健康資料、歷史、容器、與裝置清單雙向同步、agent 設定
+  alerts.py               告警規則、觸發 / 解除判斷、webhook 通知（data/alerts.json）
+  storage.py              data/ 下 JSON 檔的原子寫入
+  web.py                  路由共用：JSON 回應、請求解析、輸入驗證
+  routes/                 HTTP 路由，依功能分成 Blueprint
+    pages.py                首頁、/api/health
+    devices.py              裝置清單：列出、新增、更新、改名 / 停車位置、移除
+    commands.py             測試連線、指令表、送指令（含逾時決定）
+    monitoring.py           健康監控：綁定 agent、歷史、容器、agent 設定
+    alerts.py               告警規則與 webhook 測試
+templates/index.html    頁面骨架與對話框
+static/style.css        樣式（沿用 ACQUA-Automation 的設計：主色 #009B85 + 白），依區塊分段
+static/js/              前端，依功能分檔、照順序載入、不需要 build
+  core.js                 設定、共用狀態、api()、API token、通知、確認視窗
+  devices.js              Devices 頁：裝置清單、控制面板、指令紀錄、新增 / 改名 / 移除
+  health.js               裝置面板的 Health 區塊、綁定 agent、agent 設定說明
+  charts.js               健康歷史圖表
+  monitoring.js           Monitoring 頁、容器清單、告警規則
+  park.js                 停車位置、Home & park、Home all devices
+  main.js                 定時刷新、事件處理、啟動
+tests/                  pytest（不需要 Pi 或 Beszel）
+deploy/ansible/         一次部署所有 Pi 並註冊到這裡（見下方「用 Ansible 部署多台 Pi」）
+docker-compose.yml      控制中心 + Beszel hub
 ```
 
 ---
@@ -107,10 +129,11 @@ python app.py
 
 ```
 ┌──┬─────────────┬───────────────────────────────────────────────┐
-│⚙ │ Devices  +Add│ floor c ✎                  Online  Test Remove │
-│  │ ● floor c   │ pi-01 · 172.18.177.105:5000                    │
-│  │   CPU 12%   │ HEALTH  Agent CPU Memory … Uptime  History ▸   │
-│  │ ● front 1 a │ CONTROLS                                       │
+│▦ │ Devices  +Add│ floor c ✎                  Online  Test Remove │
+│◔ │ ● floor c   │ pi-01 · 172.18.177.105:5000                    │
+│⚙ │   CPU 12%   │ HEALTH  Agent CPU Memory … Uptime  History ▸   │
+│  │ ● front 1 a │ PARKING  X 200 mm · Y 500 mm   Edit  Home&park │
+│  │             │ CONTROLS                                       │
 │  │             │ [X Axis] [Y Axis] [Z Axis] [Rotation]          │
 │  │             │ [Tilt] [LED Test]                              │
 │  │ Home all    │ Custom command ................... [Send]      │
@@ -120,15 +143,44 @@ python app.py
 
 | 區塊 | 功能 |
 |---|---|
-| 左側欄 | **⚙** 健康監控設定、底部圓點 = 與控制中心伺服器的連線 |
-| 裝置清單 | 點一台切換右邊面板；顯示狀態徽章、IP、CPU／溫度；正在跑指令時圓點變成轉圈 |
-| Home all devices | 每台依序 X → Y → Z → 旋轉歸位，裝置之間並行；某一軸失敗就停止那台，結束時顯示幾台成功／失敗 |
+| 左側欄 | **▦** Devices 頁、**◔** Monitoring 頁（紅色數字 = 目前的告警數）、**⚙** 在 Pi 上啟用健康監控的說明、底部圓點 = 與控制中心伺服器的連線 |
+| 裝置清單 | 點一台切換右邊面板；顯示狀態徽章、IP、CPU／溫度、⚠ 告警數；正在跑指令時圓點變成轉圈 |
+| Home all devices | 每台先歸位（X → Y → Z → 旋轉），再移動到**那台的停車位置**（有設定的話）；裝置之間並行，某一步失敗就停止那台，結束時顯示幾台完成／失敗。見[歸位與停車位置](#歸位與停車位置) |
 | Test all connections | 測試所有裝置，結束時顯示「幾台 online」 |
 | 面板標題 | 點大標題直接改名（Enter 或點旁邊儲存、Esc 取消、清空 = 恢復原名）；下方小字是正式名稱、位址、Pi 程式版本 |
 | Health | 目前的 CPU／記憶體／磁碟／溫度；**History** 開歷史圖表，見 [Pi 健康監控](#pi-健康監控beszel) |
+| Parking | 這台的停車位置；**Edit** 設定、**Home & park** 只對這台執行歸位 + 停車 |
 | Controls | X/Y/Z 軸 Calibrate／Home／Position／Move、Rotation、Tilt、LED Test；Move 欄位按 Enter 即送出。**按鈕、每個指令的逾時、Home all 的順序都來自那台 Pi 的指令表**（Pi 專案的 `commands.py`），所以永遠跟它的韌體一致 |
 | Custom command | 按鈕清單以外的韌體指令（例如除錯用），Enter 即送出；逾時用那台 Pi 的 `COMMAND_TIMEOUT` |
 | 指令紀錄 | 每台各自保留最近 30 筆；執行中顯示經過秒數；結果為 **Done** / **Out of range**（超出行程、沒有實際移動）/ **Unknown command**（韌體回 ERR）/ 錯誤原因 |
+
+### 歸位與停車位置
+
+**歸位（Home）** 由韌體定義：每一軸往極限開關移動，碰到後就是該軸的 0 點，所以每台都一樣、不用設定。
+順序寫在 Pi 專案的 `commands.py`（`HOME_SEQUENCE`，目前是 `SXH → SYH → SZH → RH`）。
+傾角沒有歸位指令；歸位前要先校正過。
+
+**停車位置（Parking）** 是每台各自的待命位置，在裝置面板的 Parking 列按 **Edit** 設定：
+
+- 每個可移動的軸一格（X / Y / Z mm、Rotation / Tilt 角度），欄位從那台 Pi 的指令表產生
+- 留空 = 那一軸停在歸位的位置；**Clear all** 清除全部
+- 設定後，**Home all devices** 和 **Home & park** 都會：先跑完歸位，再依序移動到停車位置
+  （例如 `SXH → SYH → SZH → RH → SXM,200 → SYM,500 → RM,90`）
+- 存在 `data/pi_config.json` 的 `park`（以韌體的移動指令為鍵，例如 `{"SXM": 200, "RM": 90}`）；
+  Ansible 重新部署（`PUT /api/pi/<id>`）不會清掉它
+
+### Monitoring 頁
+
+左側欄 **◔** 切換到 Monitoring 頁，一次看所有 Pi：
+
+- **Active alerts**：目前觸發中的告警，最上方紅框
+- **每台一張卡片**：控制連線狀態、agent 狀態、CPU／記憶體／磁碟／溫度長條（顏色跟著告警門檻）、負載、運行時間；
+  **History** 開歷史圖表、**Containers** 看那台 Pi 上每個 Docker 容器的狀態、CPU、記憶體
+- **Unlinked agents**：回報中但沒綁定裝置的 Pi，按 **Add as device** 加入
+- **Recent alert events**：最近的觸發 / 解除紀錄
+- 右上 **Alert rules** 設定告警，見[告警](#告警)
+
+網址加上 `#health` 會直接打開 Monitoring 頁；`#device=pi-01` 直接打開那台裝置。
 
 ### 非阻塞操作
 
@@ -180,7 +232,8 @@ python app.py
 
 [Beszel](https://github.com/henrygd/beszel) 是輕量的主機監控工具：
 
-- **hub**（網頁 + 資料庫）跑在這台 PC，已寫在本專案 `docker-compose.yml`，跟控制中心一起啟動
+- **hub**（資料庫）跑在這台 PC，已寫在本專案 `docker-compose.yml`，跟控制中心一起啟動。
+  控制中心直接讀它的資料，**所有畫面都在控制中心裡**；Beszel 自己的網頁（8090）只有維護時才需要
 - **agent**（約 4 MB）每台 Pi 一個，已寫在 Pi 專案的 `docker-compose.yml`，**預設不啟動**
 
 控制中心每 10 秒從 hub 讀一次資料：
@@ -192,7 +245,28 @@ python app.py
   滑鼠移到任一張圖上，所有圖會一起顯示同一時間點的數值；開著時每分鐘自動更新。
   資料由控制中心用 `.env` 的帳密向 hub 取得，**不用另外登入 Beszel**。
   中間有斷掉的地方 = 那段時間 Pi 或 agent 沒有回報
+- **Containers**（Monitoring 頁）：那台 Pi 上每個 Docker 容器的狀態、健康檢查、CPU、記憶體
+- **告警**：見下方[告警](#告警)
 - 名稱、新增、刪除兩邊會同步，見下方「與裝置清單同步」
+
+### 告警
+
+在 Monitoring 頁右上 **Alert rules** 設定，存在 `data/alerts.json`：
+
+| 規則 | 預設 |
+|---|---|
+| Monitoring agent down（agent 停止回報） | 開 |
+| CPU ≥ | 90% |
+| Memory ≥ | 90% |
+| Disk ≥ | 90% |
+| Temperature ≥ | 80°C |
+
+- 條件要**連續成立約 20 秒**（兩次同步）才觸發，避免瞬間尖峰誤報；條件消失就自動解除
+- 觸發中的告警顯示在 Monitoring 頁最上方、那台的卡片、裝置清單（⚠）和左側欄的紅色數字
+- **Webhook URL**（選填）：觸發與解除時送出 `{"text": "…"}`，Teams / Slack 的 incoming webhook 都吃這個格式；
+  **Send test** 可以先試送一則
+- agent 斷線時不判斷 CPU 等數值（那是斷線前的舊資料）
+- 觸發 / 解除紀錄只存在記憶體（最近 200 筆），重啟控制中心會清空；規則本身會保存
 
 ### 第一次設定
 
@@ -285,7 +359,8 @@ python app.py
 
 | 位置 | 內容 | 版控 |
 |---|---|---|
-| `data/pi_config.json` | 裝置清單 | ✗（`.gitignore`） |
+| `data/pi_config.json` | 裝置清單（含停車位置、Beszel 綁定） | ✗（`.gitignore`） |
+| `data/alerts.json` | 告警規則與 webhook URL（第一次在網頁上儲存時產生） | ✗（`.gitignore`） |
 | `beszel_data/` | Beszel 帳號、系統、歷史數據 | ✗（`.gitignore`） |
 
 `data/pi_config.json` 第一次啟動時自動產生：
@@ -299,7 +374,8 @@ python app.py
       "name": "pi-01",
       "alternative_name": "Left rail",
       "beszel_system_id": "6vybygh6a8h4829",
-      "beszel_name": "Left rail"
+      "beszel_name": "Left rail",
+      "park": { "SXM": 200, "SYM": 500, "RM": 90 }
     }
   }
 }
@@ -307,6 +383,7 @@ python app.py
 
 - `beszel_system_id`：綁定的 Beszel 系統 ID；`""` = 還沒綁定（可自動綁定）、`"none"` = 手動解除綁定（不再自動綁定）
 - `beszel_name`：上次同步時兩邊一致的名稱，用來判斷之後是哪一邊改了名，**不要手動改**
+- `park`：停車位置，鍵是韌體的移動指令（`SXM` / `SYM` / `SZM` / `RM` / `TM`），沒列出的軸停在歸位位置
 - **只存設定**：連線狀態只放在記憶體，輪詢不會一直改寫檔案。舊版的 `status`、`brightness` 欄位會被忽略，下次存檔時自動拿掉。
 - **可以直接手動編輯**：伺服器偵測到檔案修改時間改變就重新讀取，不用重啟。
 - **壞掉時不會被覆蓋**：JSON 格式錯誤時，伺服器把壞檔另存成 `pi_config.json.broken-<時間>`、記錄錯誤，
@@ -330,14 +407,18 @@ python app.py
 | `POST` | `/api/pi` | 新增裝置（可直接綁定 Beszel 系統） |
 | `PUT` | `/api/pi/<id>` | 建立或更新裝置（部署工具用，可重複執行） |
 | `GET` | `/api/pi/<id>/commands` | 那台 Pi 的指令表（按鈕、逾時、Home all 順序） |
-| `PATCH` | `/api/pi/<id>` | 修改 `alternative_name` |
+| `PATCH` | `/api/pi/<id>` | 修改 `alternative_name` 和 / 或停車位置 `park` |
 | `DELETE` | `/api/pi/<id>` | 移除裝置（`?beszel=1` 連同 Beszel 系統一起刪） |
 | `POST` | `/api/pi/<id>/beszel` | 綁定 / 解除綁定 Beszel 系統 |
 | `GET` | `/api/pi/<id>/health/history` | 健康數據歷史（網頁的 History 圖表） |
+| `GET` | `/api/pi/<id>/containers` | 那台 Pi 上的 Docker 容器與資源用量 |
 | `GET`/`POST` | `/api/pi/<id>/test` | 測試連線（請 Arduino 回應一次） |
 | `POST` | `/api/pi/<id>/command` | 送韌體指令 |
 | `GET` | `/api/beszel` | 健康監控狀態 + 未綁定的 agent |
 | `GET` | `/api/beszel/agent-env` | 產生 Pi `.env` 的 agent 設定 |
+| `GET` | `/api/alerts` | 告警規則、觸發中的告警、最近的觸發 / 解除紀錄 |
+| `PUT` | `/api/alerts` | 儲存告警規則 / webhook URL |
+| `POST` | `/api/alerts/test` | 對 webhook 送一則測試訊息 |
 
 ### `GET /api/pis`
 
@@ -390,10 +471,13 @@ python app.py
 ### `PATCH /api/pi/<id>`
 
 ```json
-{ "alternative_name": "Left rail" }
+{ "alternative_name": "Left rail", "park": { "SXM": 200, "RM": 90 } }
 ```
 
-傳空字串代表清掉（退回顯示 `name`），上限 64 字。回傳更新後的裝置：`{ "status": "success", "pi_id": "pi-01", "pi": { ... } }`
+兩個欄位都可以單獨送。回傳更新後的裝置：`{ "status": "success", "pi_id": "pi-01", "pi": { ... } }`
+
+- `alternative_name`：空字串代表清掉（退回顯示 `name`），上限 64 字
+- `park`：整組取代；值為 `null` 的軸會被拿掉，`{}` 清除全部。值不是數字時回 `400` 並指出是哪一軸
 
 ### `DELETE /api/pi/<id>`
 
@@ -482,6 +566,34 @@ python app.py
 - `temp` 取最熱的感測器，沒有感測器時為 `null`
 - `404`：裝置不存在，或沒有綁定 agent；`400`：range 不對或沒開健康監控；`502`：連不到 hub
 
+### `GET /api/pi/<id>/containers`
+
+```json
+{ "status": "success", "pi_id": "pi-01", "containers": [
+    { "name": "pi-arduino-controller", "image": "ghcr.io/…", "status": "Up 2 hours", "health": "healthy",
+      "cpu": 3.1, "memory": 48.0, "updated": 1767323045 } ] }
+```
+
+依 CPU 由高到低；`memory` 單位 MB；`health` 是 Docker 健康檢查（`healthy` / `unhealthy` / `starting`，沒設定時為 `null`）。
+錯誤碼同 health/history。
+
+### `GET /api/alerts` / `PUT /api/alerts`
+
+```json
+{ "rules": { "agent_down": { "enabled": true },
+             "cpu":  { "enabled": true, "threshold": 90 }, "mem":  { "enabled": true, "threshold": 90 },
+             "disk": { "enabled": true, "threshold": 90 }, "temp": { "enabled": true, "threshold": 80 } },
+  "webhook_url": "https://…" }
+```
+
+`PUT` 送上面的格式（兩個欄位都可以單獨送；門檻 1–100，溫度 1–150）。`GET` 另外回傳：
+
+- `active`：觸發中的告警 `[{ device_id, rule, text, value, since }]`（`GET /api/pis` 也會附上 `alerts`）
+- `events`：最近的觸發 / 解除紀錄（最新在前，最多 200 筆，只在記憶體）
+- `webhook_error`：上一次 webhook 送失敗的原因
+
+`POST /api/alerts/test`：送一則測試訊息到目前的 webhook URL；沒設定時回 `400`，送失敗回 `502`。
+
 ### `GET /api/beszel/agent-env`
 
 回傳給 Pi `.env` 的四行（`env`：`COMPOSE_PROFILES`、`BESZEL_HUB_URL`、`BESZEL_KEY`、`BESZEL_TOKEN`），
@@ -531,7 +643,8 @@ pip install -r requirements.txt pytest
 python -m pytest
 ```
 
-不需要 Pi 或 Beszel hub：涵蓋裝置清單 upsert、逾時決定方式、Pi 的 busy / 409 對應、指令表轉發、健康歷史資料轉換、API token。
+不需要 Pi 或 Beszel hub：涵蓋裝置清單 upsert、逾時決定方式、Pi 的 busy / 409 對應、指令表轉發、健康歷史資料轉換、
+容器清單、停車位置、告警觸發 / 解除 / webhook、API token。
 Pi 端的序列埠協定測試在 Pi 專案裡。
 
 ---
@@ -666,7 +779,14 @@ JS/CSS 網址帶有版本號，重啟後瀏覽器一定會拿到新檔案，不�
   不會假裝成功、重啟後才發現裝置不見。
 - **壞檔不會被預設值覆蓋**：舊版讀檔失敗就回傳預設清單，下一次存檔就把整份清單蓋掉；現在會另存壞檔並保留記憶體中的清單。
 - **綠燈包含 Arduino**：見[裝置狀態](#裝置狀態)。
-- **前端非阻塞**：所有請求經過 `app.js` 的 `api()`——一定有逾時、不拋例外、非 JSON 回應（例如 proxy 的 HTML 錯誤頁）
+- **後端分層**：`mcc/routes/` 只處理 HTTP（解析、驗證、回應），邏輯在 `devices` / `monitor` / `beszel` / `alerts`
+  模組，共用物件集中在 `services.py`；`create_app()` 組裝全部。測試直接替換 `services` 裡的物件，不用啟動背景執行緒。
+- **前端分檔、不需要 build**：`static/js/` 依功能分成 7 個一般 script，照順序載入、共用全域範圍；只有 `main.js` 在載入時執行。
+- **健康監控全部原生**：數值、圖表、容器、告警都由控制中心向 Beszel 取資料自己畫，風格一致、不用登入 Beszel；
+  Beszel 只負責收集與儲存。
+- **告警要連續兩次成立才觸發**：一次 CPU 尖峰不會吵人；agent 斷線時不判斷數值（那是斷線前的舊資料）。
+- **停車位置跟著指令表走**：以韌體的移動指令（`SXM`…）為鍵、欄位從 Pi 的指令表產生，韌體加了新軸不用改控制中心。
+- **前端非阻塞**：所有請求經過 `core.js` 的 `api()`——一定有逾時、不拋例外、非 JSON 回應（例如 proxy 的 HTML 錯誤頁）
   也轉成看得懂的訊息。
 - **前端不用 inline `onclick`**：按鈕用 `data-*` 屬性 + 單一事件委派，顯示文字一律跳脫，後端也限制裝置 ID 字元，
   避免名稱裡的引號變成可執行的 JS。
@@ -683,7 +803,8 @@ JS/CSS 網址帶有版本號，重啟後瀏覽器一定會拿到新檔案，不�
 
 - **必須是單一程序**：狀態快取和指令鎖都在記憶體裡。Docker 裡用 gunicorn **1 個 worker** + 16 threads；
   不要調高 worker 數，多個 worker 會各自上鎖、各自輪詢。
-- **指令紀錄只存在瀏覽器分頁的記憶體裡**：重新整理就會清空。
+- **指令紀錄只存在瀏覽器分頁的記憶體裡**：重新整理就會清空。告警的觸發 / 解除紀錄只存在伺服器記憶體，重啟會清空。
+- **Home all / Home & park 由瀏覽器依序送出**：執行途中關掉或重新整理頁面，剩下的步驟就不會送。
 - **`API_TOKEN` 只是共用密碼**：沒有使用者帳號，也沒有 HTTPS；讀取類的 API（狀態、健康資料）不需要 token。
   請只在受信任的區網使用。Pi 的 API 本身沒有驗證。
 - **Ansible 不會刪除裝置**：從 inventory 拿掉的 Pi 要在網頁上 Remove。

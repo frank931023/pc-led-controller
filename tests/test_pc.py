@@ -5,27 +5,31 @@ by fakes and the background threads are not started.
 Run:  pip install -r requirements.txt pytest && python -m pytest
 """
 import json
+import time
 
 import pytest
 import requests
 
-import app as pc
-import pi_client
-from devices import DeviceStore
+import app as entry
+from mcc import pi_client, services
+from mcc.alerts import AlertEngine
+from mcc.beszel import BeszelClient, BeszelSync
+from mcc.devices import DeviceStore
+from mcc.monitor import StatusMonitor
 
 DEVICE = {'host': 'pi-01.test', 'port': 5000, 'name': 'pi-01'}
 
 
 @pytest.fixture
 def client(monkeypatch, tmp_path):
-    monkeypatch.setattr(pc, 'store', DeviceStore(str(tmp_path / 'pi_config.json'), {}))
-    monitor = pc.StatusMonitor(pc.store)
+    monkeypatch.setattr(services, 'store', DeviceStore(str(tmp_path / 'pi_config.json'), {}))
+    monitor = StatusMonitor(services.store)
     monkeypatch.setattr(monitor, 'start', lambda: None)
     monkeypatch.setattr(monitor, 'check_soon', lambda device_id: None)
-    monkeypatch.setattr(pc, 'monitor', monitor)
-    monkeypatch.setattr(pc, 'API_TOKEN', '')
-    pc.app.config['TESTING'] = True
-    return pc.app.test_client()
+    monkeypatch.setattr(services, 'monitor', monitor)
+    monkeypatch.setattr(services.settings, 'api_token', '')
+    entry.app.config['TESTING'] = True
+    return entry.app.test_client()
 
 
 @pytest.fixture
@@ -78,7 +82,6 @@ def test_put_validation(client, pi_id, body):
 
 
 def test_starts_with_no_devices(client):
-    assert pc.DEFAULT_DEVICES == {}
     assert client.get('/api/pis').get_json()['pis'] == {}
 
 
@@ -86,7 +89,7 @@ def test_starts_with_no_devices(client):
 
 def test_command_without_timeout_uses_the_pis_default(client, sent):
     client.put('/api/pi/pi-01', json=DEVICE)
-    pc.monitor._apply('pi-01', pi_client.Probe('online', {'command_timeout': 130, 'max_command_timeout': 300}), 0)
+    services.monitor._apply('pi-01', pi_client.Probe('online', {'command_timeout': 130, 'max_command_timeout': 300}), 0)
     assert client.post('/api/pi/pi-01/command', json={'command': 'SXC'}).status_code == 200
     assert sent == [{'command': 'SXC', 'timeout': 130}]
 
@@ -94,12 +97,12 @@ def test_command_without_timeout_uses_the_pis_default(client, sent):
 def test_command_without_timeout_before_first_check_uses_pc_default(client, sent):
     client.put('/api/pi/pi-01', json=DEVICE)
     client.post('/api/pi/pi-01/command', json={'command': 'SXC'})
-    assert sent[0]['timeout'] == pc.DEFAULT_COMMAND_TIMEOUT
+    assert sent[0]['timeout'] == services.settings.default_command_timeout
 
 
 def test_timeout_limit_follows_the_pi(client, sent):
     client.put('/api/pi/pi-01', json=DEVICE)
-    pc.monitor._apply('pi-01', pi_client.Probe('online', {'command_timeout': 130, 'max_command_timeout': 200}), 0)
+    services.monitor._apply('pi-01', pi_client.Probe('online', {'command_timeout': 130, 'max_command_timeout': 200}), 0)
     assert client.post('/api/pi/pi-01/command', json={'command': 'SXC', 'timeout': 200}).status_code == 200
     resp = client.post('/api/pi/pi-01/command', json={'command': 'SXC', 'timeout': 250})
     assert resp.status_code == 400 and '200' in resp.get_json()['error']
@@ -149,11 +152,11 @@ def test_probe_reads_busy_and_info(monkeypatch):
 
 def test_remote_command_shows_as_running(client):
     client.put('/api/pi/pi-01', json=DEVICE)
-    pc.monitor._apply('pi-01', pi_client.Probe('busy', {'running': {'command': 'SXC', 'seconds': 3}}), 0)
+    services.monitor._apply('pi-01', pi_client.Probe('busy', {'running': {'command': 'SXC', 'seconds': 3}}), 0)
     pi = client.get('/api/pis').get_json()['pis']['pi-01']
     assert (pi['status'], pi['running']) == ('busy', 'SXC')
 
-    pc.monitor.set('pi-01', pi_client.ONLINE)       # finished
+    services.monitor.set('pi-01', pi_client.ONLINE)       # finished
     assert client.get('/api/pis').get_json()['pis']['pi-01']['running'] is None
 
 
@@ -178,23 +181,23 @@ STATS_RECORD = {'created': '2026-01-02 03:04:05.678Z',
 def beszel(monkeypatch):
     """A configured Beszel client that knows one system, 'sys1', and records requests."""
     calls = []
-    hub = pc.BeszelClient('http://hub.test', 'a@b.c', 'pw')
+    hub = BeszelClient('http://hub.test', 'a@b.c', 'pw')
 
     def fake_request(method, path, **kwargs):
         calls.append(kwargs.get('params'))
         return {'items': [STATS_RECORD, {'created': '2026-01-02 03:05:05.678Z', 'stats': {'cpu': 3}}]}
 
     monkeypatch.setattr(hub, '_request', fake_request)
-    sync = pc.BeszelSync(hub, pc.store)
+    sync = BeszelSync(hub, services.store)
     monkeypatch.setattr(sync, 'start', lambda: None)
     monkeypatch.setattr(sync, '_systems', {'sys1': {'id': 'sys1'}})
-    monkeypatch.setattr(pc, 'health', sync)
+    monkeypatch.setattr(services, 'health', sync)
     return calls
 
 
 def test_health_history_is_converted_for_the_charts(client, beszel):
     client.put('/api/pi/pi-01', json=DEVICE)
-    pc.store.update('pi-01', beszel_system_id='sys1')
+    services.store.update('pi-01', beszel_system_id='sys1')
 
     body = client.get('/api/pi/pi-01/health/history?range=24h').get_json()
     assert body['range'] == '24h' and body['interval'] == 1200 and body['to'] - body['from'] == 86400
@@ -215,7 +218,7 @@ def test_health_history_errors(client, beszel):
 # ----- API token -----
 
 def test_token_protects_writes_only(client, monkeypatch):
-    monkeypatch.setattr(pc, 'API_TOKEN', 's3cret')
+    monkeypatch.setattr(services.settings, 'api_token', 's3cret')
     assert client.get('/api/pis').status_code == 200
     assert client.put('/api/pi/pi-01', json=DEVICE).status_code == 401
     assert client.put('/api/pi/pi-01', json=DEVICE, headers={'Authorization': 'Bearer nope'}).status_code == 401
@@ -223,3 +226,91 @@ def test_token_protects_writes_only(client, monkeypatch):
     assert ok.status_code == 201
     assert client.get('/api/beszel/agent-env').status_code == 401
     assert client.get('/api/health').get_json()['auth_required'] is True
+
+
+# ----- parking position -----
+
+def test_park_is_saved_validated_and_kept_on_upsert(client):
+    client.put('/api/pi/pi-01', json=DEVICE)
+    body = client.patch('/api/pi/pi-01', json={'park': {'SXM': 200, 'RM': -90.5, 'SZM': None}}).get_json()
+    assert body['pi']['park'] == {'SXM': 200, 'RM': -90.5}       # None = leave that axis at home
+
+    bad = client.patch('/api/pi/pi-01', json={'park': {'SXM': 'far'}})
+    assert bad.status_code == 400 and 'SXM' in bad.get_json()['error']
+    assert client.patch('/api/pi/pi-01', json={'park': [1, 2]}).status_code == 400
+    assert client.patch('/api/pi/pi-01', json={}).status_code == 400
+
+    # A deploy tool re-applying its inventory must not wipe what the UI set.
+    client.put('/api/pi/pi-01', json=DEVICE)
+    assert services.store.get('pi-01')['park'] == {'SXM': 200, 'RM': -90.5}
+
+    assert client.patch('/api/pi/pi-01', json={'park': {}}).get_json()['pi']['park'] == {}
+
+
+# ----- alerts -----
+
+def test_alert_fires_after_two_samples_then_resolves(tmp_path, monkeypatch):
+    posted = []
+    monkeypatch.setattr('mcc.alerts.requests.post', lambda url, json, timeout: posted.append(json['text'])
+                        or type('R', (), {'raise_for_status': lambda self: None})())
+    engine = AlertEngine(str(tmp_path / 'alerts.json'))
+    engine.update({'webhook_url': 'https://hooks.test/x'})
+    devices = {'pi-01': {'name': 'pi-01', 'alternative_name': 'Left rail'}}
+    hot = {'pi-01': {'status': 'up', 'cpu': 97, 'mem': 10, 'disk': 10, 'temp': None}}
+    calm = {'pi-01': {'status': 'up', 'cpu': 5, 'mem': 10, 'disk': 10, 'temp': None}}
+
+    engine.evaluate(devices, hot)
+    assert engine.active() == []                      # one spike is not enough
+    engine.evaluate(devices, hot)
+    [alert] = engine.active()
+    assert alert['rule'] == 'cpu' and 'Left rail: CPU 97%' in alert['text']
+
+    engine.evaluate(devices, calm)
+    assert engine.active() == []
+    kinds = [e['kind'] for e in engine.state()['events']]
+    assert kinds == ['resolved', 'fired']             # newest first
+
+    for _ in range(50):                               # webhook posts run on threads
+        if len(posted) == 2:
+            break
+        time.sleep(0.02)
+    assert posted[0].startswith('🔴') and posted[1].startswith('✅')
+
+
+def test_agent_down_alert_and_disabled_rules(tmp_path):
+    engine = AlertEngine(str(tmp_path / 'alerts.json'))
+    engine.update({'rules': {'cpu': {'enabled': False, 'threshold': 50}}})
+    devices = {'pi-01': {'name': 'pi-01'}}
+    down = {'pi-01': {'status': 'down', 'cpu': 99}}
+    hot = {'pi-01': {'status': 'up', 'cpu': 99}}
+    for _ in range(2):
+        engine.evaluate(devices, down)
+    assert [a['rule'] for a in engine.active()] == ['agent_down']   # stale CPU ignored while down
+    for _ in range(2):
+        engine.evaluate(devices, hot)
+    assert engine.active() == []                                    # cpu rule switched off
+
+
+def test_alert_api_validates_and_saves(client, tmp_path, monkeypatch):
+    monkeypatch.setattr(services, 'alerts', AlertEngine(str(tmp_path / 'alerts.json')))
+    assert client.put('/api/alerts', json={'rules': {'cpu': {'threshold': 0}}}).status_code == 400
+    assert client.put('/api/alerts', json={'webhook_url': 'ftp://x'}).status_code == 400
+    ok = client.put('/api/alerts', json={'rules': {'temp': {'enabled': True, 'threshold': 75}}})
+    assert ok.status_code == 200
+    saved = json.loads((tmp_path / 'alerts.json').read_text(encoding='utf-8'))
+    assert saved['rules']['temp']['threshold'] == 75
+    assert client.post('/api/alerts/test').status_code == 400          # no webhook URL yet
+    assert client.get('/api/pis').get_json()['alerts'] == []
+
+
+def test_containers_are_proxied(client, beszel, monkeypatch):
+    client.put('/api/pi/pi-01', json=DEVICE)
+    services.store.update('pi-01', beszel_system_id='sys1')
+    monkeypatch.setattr(services.health.client, '_request', lambda method, path, **kw: {'items': [
+        {'name': 'beszel-agent', 'image': 'henrygd/beszel-agent', 'status': 'Up 2 hours', 'health': 0,
+         'cpu': 0.4, 'memory': 12.5, 'updated': 1767323045000},
+        {'name': 'pi-arduino-controller', 'image': 'ghcr.io/x/pi', 'status': 'Up 2 hours', 'health': 2,
+         'cpu': 3.1, 'memory': 48.0, 'updated': 1767323045000}]})
+    body = client.get('/api/pi/pi-01/containers').get_json()
+    assert [c['name'] for c in body['containers']] == ['pi-arduino-controller', 'beszel-agent']   # busiest first
+    assert body['containers'][0]['health'] == 'healthy' and body['containers'][1]['health'] is None

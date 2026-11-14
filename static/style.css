@@ -32,6 +32,16 @@ body { margin:0; background:var(--bg); color:var(--fg);
 .nav .st.ok { background:#fff; }
 .nav .st.dead { background:#ffd0cb; }
 
+/* sidebar icon buttons: views, setup; .on = current view */
+.nav button.navb { position:relative; width:38px; height:38px; border-radius:9px; border:none; background:transparent;
+        color:#ffffffb0; cursor:pointer; display:flex; align-items:center; justify-content:center;
+        font-size:16px; text-decoration:none; transition:background .12s, color .12s; padding:0; }
+.nav button.navb:hover { background:#ffffff24; color:#fff; }
+.nav button.navb.on { background:#fff; color:var(--brand); }
+.nbadge { position:absolute; top:3px; right:3px; min-width:15px; height:15px; padding:0 3px;
+          border-radius:8px; background:var(--fail); color:#fff; font-size:9px; font-weight:700;
+          line-height:15px; text-align:center; }
+
 /* ── Panels ── */
 .panel { background:var(--panel); border:1px solid var(--line); border-radius:var(--r);
          padding:14px 16px; display:flex; flex-direction:column; min-height:0; overflow:hidden; }
@@ -63,7 +73,44 @@ button.danger:hover:not(:disabled) { background:#d1493f10; border-color:var(--fa
 button.ghost { border-color:transparent; color:var(--muted); background:transparent; }
 button.ghost:hover:not(:disabled) { color:var(--brand); background:var(--brand-soft); }
 
-/* ── Device list ── */
+/* ── Dialogs ── */
+.ov { position:fixed; inset:0; z-index:200; display:none; align-items:center;
+      justify-content:center; background:#0a201d66; backdrop-filter:blur(3px); padding:20px; }
+.ov.on { display:flex; }
+.bx { background:var(--panel); border:1px solid var(--line); border-radius:14px;
+      padding:20px 22px; width:min(420px,94vw); box-shadow:0 18px 56px #00302a2e; }
+.bx h3 { margin:0 0 5px; font-size:15px; font-weight:600; }
+.acts { display:flex; gap:7px; margin-top:16px; }
+.acts button { flex:1; }
+.bx p { margin:4px 0 0; font-size:13px; color:var(--muted); line-height:1.6; }
+.bx .err { min-height:18px; margin-top:10px; font-size:12px; color:var(--fail); }
+
+/* monitoring setup dialog */
+.bx.wide { width:min(620px,94vw); }
+.bx ol { margin:10px 0 0; padding-left:20px; font-size:13px; color:var(--muted); line-height:1.7; }
+.bx ol code, .bx p code { font-family:Consolas,"Cascadia Mono",monospace; font-size:12px;
+        background:var(--sunk); padding:1px 5px; border-radius:4px; color:var(--fg); }
+.envbox { position:relative; margin-top:8px; }
+.envbox pre { margin:0; padding:10px 12px; background:var(--sunk); border:1px solid var(--line);
+              border-radius:var(--r-sm); font:12px/1.6 Consolas,"Cascadia Mono",monospace;
+              white-space:pre-wrap; word-break:break-all; min-height:90px; }
+.envbox button { position:absolute; top:6px; right:6px; padding:3px 10px; font-size:11px; }
+.bx .warnline { margin-top:10px; font-size:12px; color:var(--warn); }
+.bx p a { color:var(--brand); }
+
+/* ── Toasts ── */
+#toasts { position:fixed; right:18px; bottom:18px; z-index:300;
+          display:flex; flex-direction:column; gap:6px; }
+.toast { background:var(--panel); border:1px solid var(--line); border-left:3px solid var(--brand);
+         border-radius:var(--r-sm); padding:9px 14px; font-size:12px;
+         box-shadow:0 8px 26px #00302a1a; transition:opacity .3s; }
+.toast.error { border-left-color:var(--fail); }
+
+::-webkit-scrollbar { width:8px; height:8px; }
+::-webkit-scrollbar-thumb { background:var(--line-2); border-radius:4px; }
+::-webkit-scrollbar-track { background:transparent; }
+
+/* ── Devices page: list ── */
 .top { display:flex; align-items:center; gap:10px; flex:none; margin-bottom:12px; }
 .top h1 { font-size:18px; margin:0; font-weight:650; letter-spacing:-.01em; }
 .top .n { font-size:11px; color:var(--faint); }
@@ -100,7 +147,23 @@ button.ghost:hover:not(:disabled) { color:var(--brand); background:var(--brand-s
         margin-top:12px; padding-top:12px; border-top:1px solid var(--line); }
 .foot button { width:100%; }
 
-/* ── Device controls ── */
+/* ── Beszel link / unlinked agents ── */
+.health h2 .hlinks { margin-left:auto; display:flex; gap:12px; }
+.health h2 .hlinks a { margin-left:0; }
+.hnote select { width:auto; max-width:220px; padding:5px 8px; border-radius:var(--r-sm);
+                border:1px solid var(--line); background:var(--panel); color:var(--fg); font:inherit; font-size:12px; }
+.unl { margin-top:14px; padding-top:12px; border-top:1px solid var(--line); }
+.unl h2 { display:flex; align-items:center; gap:6px; }
+.unl h2 .n { font-size:10px; color:var(--faint); letter-spacing:0; }
+.dv.static { cursor:default; }
+.dv.static:hover { background:transparent; }
+button.sm { padding:3px 10px; font-size:11px; }
+.hint { font-size:11px; color:var(--faint); margin:6px 0 0; line-height:1.5; }
+label.check { display:flex; align-items:center; gap:7px; margin:12px 0 0; font-size:12px;
+              color:var(--fg); text-transform:none; letter-spacing:0; cursor:pointer; }
+label.check input { width:auto; margin:0; accent-color:var(--fail); }
+
+/* ── Devices page: selected device ── */
 .head { display:flex; align-items:center; gap:10px; flex:none;
         padding-bottom:12px; margin-bottom:12px; border-bottom:1px solid var(--line); }
 .head .t { flex:1; min-width:0; }
@@ -130,6 +193,14 @@ button.ghost:hover:not(:disabled) { color:var(--brand); background:var(--brand-s
 .custom { display:flex; gap:7px; flex:none; margin-top:12px; }
 .custom input { font-family:Consolas,"Cascadia Mono",monospace; }
 
+/* parking row in the device panel */
+.park { flex:none; display:flex; align-items:center; gap:10px; margin-bottom:12px; padding:8px 12px;
+        border:1px solid var(--line); border-radius:var(--r-sm); font-size:12px; }
+.park .pk { font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.09em; color:var(--faint); }
+.park .pv { color:var(--fg); font-variant-numeric:tabular-nums; }
+.park .sp { flex:1; }
+.faint { color:var(--faint); text-transform:none; letter-spacing:0; }
+
 /* Command history: newest first, panel has a fixed height so the layout never jumps */
 .hist { flex:none; margin-top:12px; height:170px; overflow-y:auto; background:var(--sunk);
         border:1px solid var(--line); border-radius:var(--r-sm); font-size:12px; }
@@ -154,38 +225,7 @@ button.running { opacity:1 !important; border-color:var(--brand); color:var(--br
         animation:spin .8s linear infinite; }
 @keyframes spin { to { transform:rotate(360deg); } }
 
-/* ── Dialog ── */
-.ov { position:fixed; inset:0; z-index:200; display:none; align-items:center;
-      justify-content:center; background:#0a201d66; backdrop-filter:blur(3px); padding:20px; }
-.ov.on { display:flex; }
-.bx { background:var(--panel); border:1px solid var(--line); border-radius:14px;
-      padding:20px 22px; width:min(420px,94vw); box-shadow:0 18px 56px #00302a2e; }
-.bx h3 { margin:0 0 5px; font-size:15px; font-weight:600; }
-.acts { display:flex; gap:7px; margin-top:16px; }
-.acts button { flex:1; }
-.bx p { margin:4px 0 0; font-size:13px; color:var(--muted); line-height:1.6; }
-.bx .err { min-height:18px; margin-top:10px; font-size:12px; color:var(--fail); }
-
-/* ── Toast ── */
-#toasts { position:fixed; right:18px; bottom:18px; z-index:300;
-          display:flex; flex-direction:column; gap:6px; }
-.toast { background:var(--panel); border:1px solid var(--line); border-left:3px solid var(--brand);
-         border-radius:var(--r-sm); padding:9px 14px; font-size:12px;
-         box-shadow:0 8px 26px #00302a1a; transition:opacity .3s; }
-.toast.error { border-left-color:var(--fail); }
-
-::-webkit-scrollbar { width:8px; height:8px; }
-::-webkit-scrollbar-thumb { background:var(--line-2); border-radius:4px; }
-::-webkit-scrollbar-track { background:transparent; }
-
-@media (max-width:860px) {
-  html, body { overflow:auto; }
-  .shell { grid-template-columns:1fr; height:auto; }
-  .nav { display:none; }
-  .work { grid-template-columns:1fr; height:auto; }
-}
-
-/* ── Pi health (from Beszel) ── */
+/* ── Health (device panel) ── */
 .dv .t small.hl { color:var(--muted); font-variant-numeric:tabular-nums; }
 .health { flex:none; margin-bottom:12px; }
 .hgrid { display:grid; grid-template-columns:repeat(auto-fill,minmax(92px,1fr)); gap:7px; }
@@ -204,42 +244,7 @@ button.running { opacity:1 !important; border-color:var(--brand); color:var(--br
                font-weight:600; color:var(--brand); text-decoration:none; }
 .health h2 a:hover { text-decoration:underline; }
 
-/* sidebar icon buttons */
-.nav a, .nav button.navb { width:38px; height:38px; border-radius:9px; border:none; background:transparent;
-        color:#ffffffb0; cursor:pointer; display:flex; align-items:center; justify-content:center;
-        font-size:16px; text-decoration:none; transition:background .12s, color .12s; padding:0; }
-.nav a:hover, .nav button.navb:hover { background:#ffffff24; color:#fff; }
-
-/* monitoring setup dialog */
-.bx.wide { width:min(620px,94vw); }
-.bx ol { margin:10px 0 0; padding-left:20px; font-size:13px; color:var(--muted); line-height:1.7; }
-.bx ol code, .bx p code { font-family:Consolas,"Cascadia Mono",monospace; font-size:12px;
-        background:var(--sunk); padding:1px 5px; border-radius:4px; color:var(--fg); }
-.envbox { position:relative; margin-top:8px; }
-.envbox pre { margin:0; padding:10px 12px; background:var(--sunk); border:1px solid var(--line);
-              border-radius:var(--r-sm); font:12px/1.6 Consolas,"Cascadia Mono",monospace;
-              white-space:pre-wrap; word-break:break-all; min-height:90px; }
-.envbox button { position:absolute; top:6px; right:6px; padding:3px 10px; font-size:11px; }
-.bx .warnline { margin-top:10px; font-size:12px; color:var(--warn); }
-.bx p a { color:var(--brand); }
-
-/* ── Beszel link / unlinked agents ── */
-.health h2 .hlinks { margin-left:auto; display:flex; gap:12px; }
-.health h2 .hlinks a { margin-left:0; }
-.hnote select { width:auto; max-width:220px; padding:5px 8px; border-radius:var(--r-sm);
-                border:1px solid var(--line); background:var(--panel); color:var(--fg); font:inherit; font-size:12px; }
-.unl { margin-top:14px; padding-top:12px; border-top:1px solid var(--line); }
-.unl h2 { display:flex; align-items:center; gap:6px; }
-.unl h2 .n { font-size:10px; color:var(--faint); letter-spacing:0; }
-.dv.static { cursor:default; }
-.dv.static:hover { background:transparent; }
-button.sm { padding:3px 10px; font-size:11px; }
-.hint { font-size:11px; color:var(--faint); margin:6px 0 0; line-height:1.5; }
-label.check { display:flex; align-items:center; gap:7px; margin:12px 0 0; font-size:12px;
-              color:var(--fg); text-transform:none; letter-spacing:0; cursor:pointer; }
-label.check input { width:auto; margin:0; accent-color:var(--fail); }
-
-/* ── Health history charts (same card look as the control groups) ── */
+/* ── Health history charts ── */
 .bx.xl { width:min(900px,94vw); max-height:90vh; display:flex; flex-direction:column; }
 .ch-head { display:flex; align-items:center; gap:12px; flex:none; }
 .ch-head h3 { margin:0; flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
@@ -270,3 +275,68 @@ label.check input { width:auto; margin:0; accent-color:var(--fail); }
              border:1px dashed var(--line-2); border-radius:var(--r-sm); }
 .chart .ax { display:flex; justify-content:space-between; margin-top:5px; font-size:10px; color:var(--faint);
              font-variant-numeric:tabular-nums; }
+
+/* ── Monitoring page ── */
+.work.single { grid-template-columns:1fr; }
+.work[hidden] { display:none; }
+.top button { padding:5px 11px; font-size:12px; }
+h2.sect { margin:18px 0 10px; display:flex; gap:6px; align-items:center; }
+h2 .n { font-size:10px; color:var(--faint); letter-spacing:0; }
+
+.mgrid { display:grid; grid-template-columns:repeat(auto-fill,minmax(280px,1fr)); gap:12px; }
+.mcard { border:1px solid var(--line); border-radius:var(--r); padding:12px 14px; background:var(--panel); }
+.mcard.alerting { border-color:#d1493f66; box-shadow:0 0 0 1px #d1493f22; }
+.mcard.dim { background:var(--sunk); }
+.mhead { display:flex; align-items:center; gap:6px; margin-bottom:10px; }
+.mhead .t { flex:1; min-width:0; }
+.mhead .t b { display:block; font-size:14px; font-weight:650; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.mhead .t small { display:block; font-size:11px; color:var(--faint); }
+.malert { font-size:12px; color:var(--fail); background:#d1493f0d; border-radius:var(--r-sm);
+          padding:5px 8px; margin-bottom:8px; }
+.mrow { display:grid; grid-template-columns:62px 1fr 48px; align-items:center; gap:8px; margin:5px 0; font-size:12px; }
+.mrow .mk { color:var(--muted); }
+.mbar { height:6px; border-radius:3px; background:var(--sunk); overflow:hidden; }
+.mbar i { display:block; height:100%; background:var(--brand); transition:width .4s ease; }
+.mbar i.warn { background:var(--warn); }
+.mbar i.fail { background:var(--fail); }
+.mrow .mv { text-align:right; font-variant-numeric:tabular-nums; font-weight:600; }
+.mrow .mv.warn { color:var(--warn); } .mrow .mv.fail { color:var(--fail); }
+.mfoot { display:flex; gap:12px; margin-top:8px; font-size:11px; color:var(--faint); font-variant-numeric:tabular-nums; }
+.macts { display:flex; gap:6px; margin-top:10px; }
+
+.abox { border:1px solid #d1493f44; background:#d1493f08; border-radius:var(--r); padding:10px 14px; margin-bottom:12px; }
+.abox h2 { margin-bottom:6px; color:var(--fail); }
+.arow { display:flex; align-items:center; gap:8px; font-size:13px; padding:3px 0; }
+.arow time { margin-left:auto; font-size:11px; color:var(--faint); }
+.elog { border:1px solid var(--line); border-radius:var(--r-sm); }
+.erow { display:grid; grid-template-columns:170px 70px 1fr; gap:10px; padding:6px 12px; font-size:12px; }
+.erow + .erow { border-top:1px solid var(--line); }
+.erow time { color:var(--faint); font-variant-numeric:tabular-nums; }
+.erow.fired span:nth-child(2) { color:var(--fail); font-weight:600; }
+.erow.resolved span:nth-child(2) { color:var(--ok); font-weight:600; }
+
+/* containers table */
+.tablewrap { max-height:60vh; overflow:auto; margin-top:8px; }
+.tbl { width:100%; border-collapse:collapse; font-size:12px; }
+.tbl th { text-align:left; font-size:10px; text-transform:uppercase; letter-spacing:.06em; color:var(--faint);
+          font-weight:700; padding:6px 8px; border-bottom:1px solid var(--line); position:sticky; top:0; background:var(--panel); }
+.tbl td { padding:7px 8px; border-bottom:1px solid var(--line); vertical-align:middle; }
+.tbl .num { text-align:right; font-variant-numeric:tabular-nums; }
+.tbl .mono { font-family:Consolas,"Cascadia Mono",monospace; font-size:11px; color:var(--muted); }
+
+/* alert rules */
+.rules { margin-top:10px; border:1px solid var(--line); border-radius:var(--r-sm); }
+.rrow { display:flex; align-items:center; gap:10px; padding:8px 12px; }
+.rrow + .rrow { border-top:1px solid var(--line); }
+.rrow label.check { margin:0; flex:1; }
+.rth { display:flex; align-items:center; gap:5px; font-size:12px; color:var(--muted); width:90px; justify-content:flex-end; }
+.rth input { width:62px; padding:4px 6px; text-align:right; }
+
+/* ── Narrow screens: one column, the page scrolls ── */
+@media (max-width:860px) {
+  html, body { overflow:auto; }
+  .shell { grid-template-columns:1fr; height:auto; }
+  .nav { display:none; }
+  .work { grid-template-columns:1fr; height:auto; }
+  .erow { grid-template-columns:1fr; gap:2px; }
+}

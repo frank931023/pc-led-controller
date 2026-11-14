@@ -40,12 +40,11 @@ A system_stats record is one averaged sample:
 import logging
 import re
 import threading
-import time
 from datetime import datetime, timedelta, timezone
 
 import requests
 
-from devices import StoreError
+from .devices import StoreError
 
 log = logging.getLogger(__name__)
 
@@ -137,6 +136,30 @@ class BeszelClient:
     def delete_system(self, system_id):
         self._request('DELETE', f'/api/collections/systems/records/{system_id}')
 
+    def containers(self, system_id):
+        """
+        Containers currently running on one Pi, busiest first:
+          [{name, image, status, health, cpu (%), memory (MB), updated (Unix s)}]
+        """
+        if not SYSTEM_ID_RE.match(system_id or ''):
+            raise BeszelError('Invalid Beszel system id')
+        body = self._request('GET', '/api/collections/containers/records', params={
+            'filter': f"system='{system_id}'",
+            'fields': 'name,image,status,health,cpu,memory,updated',
+            'perPage': 200,
+        })
+        items = [{
+            'name': c.get('name'),
+            'image': c.get('image'),
+            'status': c.get('status'),
+            # Beszel stores Docker health as 0 none, 1 starting, 2 healthy, 3 unhealthy
+            'health': {1: 'starting', 2: 'healthy', 3: 'unhealthy'}.get(c.get('health')),
+            'cpu': c.get('cpu'),
+            'memory': c.get('memory'),
+            'updated': (c.get('updated') or 0) // 1000 if isinstance(c.get('updated'), (int, float)) else None,
+        } for c in body.get('items', [])]
+        return sorted(items, key=lambda c: -(c['cpu'] or 0))
+
     def history(self, system_id, range_key):
         """
         Samples for one chart range, oldest first:
@@ -195,6 +218,9 @@ class BeszelSync:
         self._fetched = False
         self._thread = None
         self._wake = threading.Event()
+        # Called as on_sync(devices, health_by_device) after every successful sync
+        # (app.py hooks the alert engine in here).
+        self.on_sync = None
 
     # ----- lifecycle -----
 
@@ -240,6 +266,10 @@ class BeszelSync:
             if self._error:
                 log.info('Beszel hub connected (%d systems)', len(systems))
             self._systems, self._error, self._fetched = systems, None, True
+
+        if self.on_sync:
+            devices = self._store.all()
+            self.on_sync(devices, self.health_by_device(devices))
 
     def _reconcile(self, systems):
         devices = self._store.all()

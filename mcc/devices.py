@@ -8,11 +8,14 @@ monitor.StatusMonitor, so status polling never rewrites the file.
 import copy
 import json
 import logging
+import math
 import os
+import re
 import shutil
-import tempfile
 import threading
 import time
+
+from .storage import write_json_atomic
 
 log = logging.getLogger(__name__)
 
@@ -150,19 +153,8 @@ class DeviceStore:
         self._mtime = mtime
 
     def _write(self, devices):
-        """Atomic write: temp file + os.replace, so a crash never leaves half a JSON."""
-        directory = os.path.dirname(os.path.abspath(self.path))
         try:
-            os.makedirs(directory, exist_ok=True)
-            fd, tmp = tempfile.mkstemp(dir=directory, suffix='.tmp')
-            try:
-                with os.fdopen(fd, 'w', encoding='utf-8') as f:
-                    json.dump({'pis': devices}, f, indent=2, ensure_ascii=False)
-                os.replace(tmp, self.path)
-            except BaseException:
-                if os.path.exists(tmp):
-                    os.unlink(tmp)
-                raise
+            write_json_atomic(self.path, {'pis': devices})
             self._mtime = os.stat(self.path).st_mtime_ns
         except OSError as e:
             log.error("Cannot save %s: %s", self.path, e)
@@ -187,4 +179,27 @@ def _clean(device_id, info):
         'beszel_system_id': str(info.get('beszel_system_id') or '').strip(),
         # Name both sides agreed on at the last sync; tells which side renamed since.
         'beszel_name': str(info.get('beszel_name') or '').strip(),
+        # Parking position, by move command prefix: {"SXM": 200, "RM": 90}. "Home all"
+        # homes every axis, then moves each listed axis here. Axes left out stay home.
+        'park': clean_park(info.get('park')),
     }
+
+
+PARK_KEY_RE = re.compile(r'^[A-Z]{1,8}$')     # firmware move prefixes: SXM, SYM, SZM, RM, TM ...
+
+
+def clean_park(park):
+    """Keep only {PREFIX: finite number}; anything else (null, text, bad keys) is dropped."""
+    if not isinstance(park, dict):
+        return {}
+    result = {}
+    for key, value in park.items():
+        if not PARK_KEY_RE.match(str(key)) or isinstance(value, bool):
+            continue
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            continue
+        if math.isfinite(number):
+            result[str(key)] = int(number) if number.is_integer() else number
+    return result
