@@ -1,0 +1,23 @@
+# The one list of Pis. Copy to inventory.yml (not committed) and edit:
+#   cp inventory.example.yml inventory.yml
+#
+# The host name (pi-01, pi-02, …) becomes the Pi's PI_ID and its Device ID in the control
+# center, and the Beszel agent's name, so all three always match.
+#
+# Per-Pi overrides (all optional):
+#   serial_port   Arduino port; default = the only device in /dev/serial/by-id, else /dev/ttyUSB0
+#   pi_port       port the Pi's API listens on (default 5000)
+#   pi_name       name shown in the control center (default = host name);
+#                 a nicer label can still be set in the web UI, Ansible never overwrites it
+#   register_host address the control center uses to reach the Pi (default = ansible_host)
+all:
+  children:
+    pis:
+      vars:
+        ansible_user: pi
+      hosts:
+        pi-01:
+          ansible_host: 172.18.177.105
+        pi-02:
+          ansible_host: 172.18.177.104
+          serial_port: /dev/ttyACM0

@@ -71,6 +71,22 @@ class DeviceStore:
             self._commit(new)
             return copy.deepcopy(new[device_id])
 
+    def upsert(self, device_id, info):
+        """
+        Create the device, or overwrite the given fields of an existing one.
+        Fields not in `info` (alternative_name set in the UI, the Beszel link) are kept,
+        so a deploy tool can re-apply its inventory without undoing changes made here.
+        Returns (device, created).
+        """
+        with self._lock:
+            self._reload_if_changed()
+            new = copy.deepcopy(self._devices)
+            created = device_id not in new
+            new[device_id] = _clean(device_id, {**new.get(device_id, {}), **info})
+            if new != self._devices:
+                self._commit(new)
+            return copy.deepcopy(new[device_id]), created
+
     def update(self, device_id, **fields):
         """Returns the updated device, or None if it does not exist."""
         with self._lock:

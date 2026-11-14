@@ -85,6 +85,7 @@ button.ghost:hover:not(:disabled) { color:var(--brand); background:var(--brand-s
 .dot.no-arduino { background:var(--warn); }
 .dot.offline { background:var(--fail); }
 .dot.checking { background:var(--line-2); animation:pulse 1.2s ease-in-out infinite; }
+.dot.busy { background:var(--brand); animation:pulse 1.2s ease-in-out infinite; }
 @keyframes pulse { 50% { opacity:.3; } }
 
 .badge { font-size:10px; color:var(--muted); padding:2px 8px; border-radius:20px;
@@ -93,6 +94,7 @@ button.ghost:hover:not(:disabled) { color:var(--brand); background:var(--brand-s
 .badge.no-arduino { color:var(--warn); border-color:#b7791f33; }
 .badge.offline { color:var(--fail); border-color:#d1493f33; }
 .badge.checking { color:var(--faint); }
+.badge.busy { color:var(--brand-dark); border-color:var(--brand-line); }
 
 .foot { flex:none; display:flex; flex-direction:column; gap:7px;
         margin-top:12px; padding-top:12px; border-top:1px solid var(--line); }
@@ -236,3 +238,35 @@ button.sm { padding:3px 10px; font-size:11px; }
 label.check { display:flex; align-items:center; gap:7px; margin:12px 0 0; font-size:12px;
               color:var(--fg); text-transform:none; letter-spacing:0; cursor:pointer; }
 label.check input { width:auto; margin:0; accent-color:var(--fail); }
+
+/* ── Health history charts (same card look as the control groups) ── */
+.bx.xl { width:min(900px,94vw); max-height:90vh; display:flex; flex-direction:column; }
+.ch-head { display:flex; align-items:center; gap:12px; flex:none; }
+.ch-head h3 { margin:0; flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.seg { display:flex; flex:none; border:1px solid var(--line); border-radius:var(--r-sm); overflow:hidden; }
+.seg button { border:none; border-radius:0; padding:4px 11px; font-size:12px; color:var(--muted); }
+.seg button + button { border-left:1px solid var(--line); }
+.seg button.on { background:var(--brand-soft); color:var(--brand); font-weight:600; }
+#chart-state:empty { display:none; }
+.charts { display:grid; grid-template-columns:repeat(auto-fill,minmax(250px,1fr)); gap:10px;
+          margin-top:14px; min-height:0; overflow-y:auto; }
+.chart { border:1px solid var(--line); border-radius:var(--r-sm); padding:10px 12px; }
+.chart .gh { display:flex; align-items:baseline; justify-content:space-between; gap:8px; margin-bottom:8px; }
+.chart .gh b { font-size:13px; font-weight:650; }
+.chart .gh span { font-size:11px; color:var(--muted); font-variant-numeric:tabular-nums; white-space:nowrap; }
+.plot { position:relative; height:96px; }
+.plot svg { display:block; width:100%; height:100%; overflow:visible; }
+.plot .grid line { stroke:var(--line); stroke-dasharray:3 3; vector-effect:non-scaling-stroke; }
+.plot .base { stroke:var(--line-2); vector-effect:non-scaling-stroke; }
+.plot .area { fill:var(--brand); fill-opacity:.09; }
+.plot .line { fill:none; stroke:var(--brand); stroke-width:1.6; stroke-linejoin:round;
+              vector-effect:non-scaling-stroke; }
+.plot .ymax { position:absolute; top:-6px; left:0; padding-right:4px; background:var(--panel);
+              font-size:9px; line-height:12px; color:var(--faint); font-variant-numeric:tabular-nums; }
+.plot .cursor { position:absolute; top:0; bottom:0; width:1px; background:var(--line-2); pointer-events:none; }
+.plot .cursor i { position:absolute; left:-3.5px; width:8px; height:8px; margin-top:-4px; border-radius:50%;
+                  background:var(--panel); border:2px solid var(--brand); }
+.plot.none { display:flex; align-items:center; justify-content:center; font-size:12px; color:var(--faint);
+             border:1px dashed var(--line-2); border-radius:var(--r-sm); }
+.chart .ax { display:flex; justify-content:space-between; margin-top:5px; font-size:10px; color:var(--faint);
+             font-variant-numeric:tabular-nums; }

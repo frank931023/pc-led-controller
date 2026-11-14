@@ -12,6 +12,7 @@ Layout:
   templates/ + static/   web UI
 """
 
+import hmac
 import logging
 import os
 import re
@@ -21,7 +22,7 @@ from flask import Flask, jsonify, render_template, request
 from werkzeug.exceptions import HTTPException
 
 import pi_client
-from beszel_client import UNLINKED, BeszelClient, BeszelError, BeszelSync
+from beszel_client import HISTORY_RANGES, UNLINKED, BeszelClient, BeszelError, BeszelSync
 from devices import DeviceExists, DeviceStore, StoreError
 from monitor import StatusMonitor
 
@@ -32,10 +33,8 @@ log = logging.getLogger('app')
 # file that doesn't exist yet makes Docker create a *directory* with that name.
 CONFIG_FILE = os.getenv('CONFIG_FILE', os.path.join('data', 'pi_config.json'))
 
-DEFAULT_DEVICES = {
-    'pi-01': {'host': '172.18.177.105', 'port': 5000, 'name': 'pi-01'},
-    'pi-02': {'host': '172.18.177.104', 'port': 5000, 'name': 'pi-02'},
-}
+# Start empty: devices come from the web UI or from the deploy tool (PUT /api/pi/<id>).
+DEFAULT_DEVICES = {}
 
 # ----- validation rules -----
 # The ID ends up in URLs and in the HTML, so keep it to safe characters.
@@ -43,7 +42,17 @@ ID_RE = re.compile(r'^[A-Za-z0-9_.-]{1,32}$')
 HOST_RE = re.compile(r'^[A-Za-z0-9.-]{1,253}$')      # hostname or IPv4, no scheme/path
 MAX_NAME = 64
 MAX_COMMAND = 64
-TIMEOUT_RANGE = (1.0, 120.0)                         # seconds a single command may take
+
+# Seconds a single command may take. Each Pi reports its own COMMAND_TIMEOUT and
+# MAX_COMMAND_TIMEOUT in /api/status and those win; these are only used before the
+# first successful status check (or with a Pi too old to report them).
+DEFAULT_COMMAND_TIMEOUT = float(os.getenv('DEFAULT_COMMAND_TIMEOUT', '130'))
+MAX_COMMAND_TIMEOUT = float(os.getenv('MAX_COMMAND_TIMEOUT', '300'))
+
+# Optional shared secret. When set, every request that changes something (and the agent
+# settings, which contain the Beszel registration token) needs
+# "Authorization: Bearer <API_TOKEN>". The web UI asks for it once and remembers it.
+API_TOKEN = os.getenv('API_TOKEN', '')
 
 # ----- Beszel (optional: leave BESZEL_URL empty to turn health monitoring off) -----
 BESZEL_URL = os.getenv('BESZEL_URL', '')                   # how *this server* reaches the hub
@@ -83,8 +92,7 @@ BAD_JSON = ('Request body must be a JSON object', 400)
 
 
 def with_status(device_id, device, device_health=None):
-    return {**device, 'status': monitor.status(device_id), 'running': monitor.running(device_id),
-            'health': device_health}
+    return {**device, **monitor.snapshot(device_id), 'health': device_health}
 
 
 def beszel_public_url():
@@ -95,7 +103,10 @@ def beszel_public_url():
 
 
 def validate_device_fields(data):
-    """Returns (fields, error_message)."""
+    """
+    Returns (fields, error_message). Names are only included when present in the
+    request, so an update never clears a name it was not asked to touch.
+    """
     host = str(data.get('host', '')).strip()
     if not HOST_RE.match(host):
         return None, 'Host must be a hostname or IPv4 address (no http://, no port)'
@@ -105,11 +116,47 @@ def validate_device_fields(data):
         return None, f"Invalid port: {data.get('port')!r}"
     if not 1 <= port <= 65535:
         return None, f'Port out of range: {port}'
-    name = str(data.get('name') or '').strip()
-    alt = str(data.get('alternative_name') or '').strip()
-    if len(name) > MAX_NAME or len(alt) > MAX_NAME:
-        return None, f'Names are limited to {MAX_NAME} characters'
-    return {'host': host, 'port': port, 'name': name, 'alternative_name': alt}, None
+    fields = {'host': host, 'port': port}
+    for key in ('name', 'alternative_name'):
+        if key in data:
+            value = str(data.get(key) or '').strip()
+            if len(value) > MAX_NAME:
+                return None, f'Names are limited to {MAX_NAME} characters'
+            fields[key] = value
+    return fields, None
+
+
+def resolve_timeout(device_id, raw):
+    """
+    Returns (timeout_seconds, error_message) for one command.
+
+    Always resolves to a number: the Pi must be told explicitly, otherwise it would wait
+    its own default (e.g. 130 s) while our HTTP request gave up much earlier, the device
+    looked offline and our lock was released mid-command.
+    """
+    info = monitor.info(device_id)
+    limit = info.get('max_command_timeout') or MAX_COMMAND_TIMEOUT
+    if raw in (None, ''):
+        return info.get('command_timeout') or DEFAULT_COMMAND_TIMEOUT, None
+    try:
+        timeout = float(raw)
+    except (TypeError, ValueError):
+        return None, f'Invalid timeout value: {raw!r}'
+    if not 1 <= timeout <= limit:
+        return None, f'Timeout must be between 1 and {limit:g} seconds'
+    return timeout, None
+
+
+def needs_token():
+    """Writes, plus the agent settings (they contain the Beszel registration token)."""
+    if not request.path.startswith('/api/'):
+        return False
+    return request.method not in ('GET', 'HEAD', 'OPTIONS') or request.path == '/api/beszel/agent-env'
+
+
+def has_valid_token():
+    given = request.headers.get('Authorization', '').removeprefix('Bearer ').strip()
+    return hmac.compare_digest(given.encode(), API_TOKEN.encode())
 
 
 # Appended to static URLs so browsers fetch new JS/CSS after a restart/rebuild
@@ -123,9 +170,14 @@ def asset_version():
 
 
 @app.before_request
-def start_monitor():
+def before_api_request():
     monitor.start()
     health.start()
+    if request.path.startswith('/api/'):
+        # Any API client (the page, a script, Ansible) keeps status polling alive.
+        monitor.touch()
+    if API_TOKEN and needs_token() and not has_valid_token():
+        return fail('Missing or wrong API token (Authorization: Bearer <API_TOKEN>)', 401)
 
 
 @app.errorhandler(HTTPException)
@@ -155,12 +207,17 @@ def index():
     return render_template('index.html')
 
 
+@app.route('/api/health', methods=['GET'])
+def service_health():
+    """Liveness check for Docker / deploy tools. Touches nothing slow."""
+    return ok(auth_required=bool(API_TOKEN))
+
+
 # ===== API =====
 
 @app.route('/api/pis', methods=['GET'])
 def list_pis():
     """All devices with their last known status (from memory, never blocks)."""
-    monitor.touch()
     devices = store.all()
     hp = health.health_by_device(devices)
     return ok(pis={i: with_status(i, d, hp.get(i)) for i, d in devices.items()},
@@ -169,10 +226,8 @@ def list_pis():
 
 def beszel_summary(devices):
     """Hub state + Beszel systems that belong to no device (for "Add as device" / "Link")."""
-    configured = health.client.configured
     return {**health.state(),
-            'url': beszel_public_url() if configured else None,
-            'unlinked': health.unlinked(devices) if configured else []}
+            'unlinked': health.unlinked(devices) if health.client.configured else []}
 
 
 @app.route('/api/beszel', methods=['GET'])
@@ -215,6 +270,26 @@ def link_beszel(pi_id):
     return ok(pi_id=pi_id, pi=with_status(pi_id, device))
 
 
+@app.route('/api/pi/<pi_id>/health/history', methods=['GET'])
+def health_history(pi_id):
+    """CPU / memory / disk / temperature / load over time, e.g. ?range=24h (default 1h)."""
+    device = store.get(pi_id)
+    if device is None:
+        return fail('Pi not found', 404)
+    range_key = request.args.get('range', '1h')
+    if range_key not in HISTORY_RANGES:
+        return fail(f'range must be one of: {", ".join(HISTORY_RANGES)}', 400)
+    if not health.client.configured:
+        return fail('Health monitoring is off (BESZEL_URL is empty)', 400)
+    if health.system(device['beszel_system_id']) is None:
+        return fail('Not linked to a monitoring agent', 404)
+    try:
+        history = health.client.history(device['beszel_system_id'], range_key)
+    except BeszelError as e:
+        return fail(str(e), 502)
+    return ok(pi_id=pi_id, range=range_key, ranges=list(HISTORY_RANGES), **history)
+
+
 @app.route('/api/beszel/agent-env', methods=['GET'])
 def beszel_agent_env():
     """
@@ -240,7 +315,8 @@ def beszel_agent_env():
         f'BESZEL_KEY="{settings["key"]}"',
         f'BESZEL_TOKEN={settings["token"]}',
     ])
-    return ok(env=env, hub_url=hub_url, warning=warning)
+    # env: ready to paste into a Pi's .env; key/token/hub_url: for deploy tools.
+    return ok(env=env, hub_url=hub_url, key=settings['key'], token=settings['token'], warning=warning)
 
 
 @app.route('/api/pi/<pi_id>', methods=['GET'])
@@ -249,8 +325,7 @@ def get_pi(pi_id):
     device = store.get(pi_id)
     if device is None:
         return fail('Pi not found', 404)
-    if monitor.running(pi_id) is None:
-        monitor.set(pi_id, pi_client.probe(device))
+    monitor.probe_now(pi_id, device)
     return ok(pi=with_status(pi_id, device))
 
 
@@ -286,6 +361,30 @@ def add_pi():
     monitor.check_soon(pi_id)
     health.wake()
     return ok(message=f"Pi '{pi_id}' added", pi_id=pi_id, pi=with_status(pi_id, device))
+
+
+@app.route('/api/pi/<pi_id>', methods=['PUT'])
+def upsert_pi(pi_id):
+    """
+    Create or update a device from a deploy tool's inventory (e.g. Ansible):
+      {"host": "192.168.1.100", "port": 5000, "name": "pi-01"}
+    Safe to repeat. alternative_name and the Beszel link set in the UI are kept
+    unless the body names them. 201 when created, 200 when it already existed.
+    """
+    if not ID_RE.match(pi_id):
+        return fail('Device ID: 1-32 characters, letters, digits, "-", "_" or "." only', 400)
+    data = json_object()
+    if data is None:
+        return fail(*BAD_JSON)
+    fields, error = validate_device_fields(data)
+    if error:
+        return fail(error, 400)
+
+    device, created = store.upsert(pi_id, fields)
+    monitor.check_soon(pi_id)
+    health.wake()
+    body = ok(pi_id=pi_id, created=created, pi=with_status(pi_id, device))
+    return (body, 201) if created else body
 
 
 @app.route('/api/pi/<pi_id>', methods=['PATCH'])
@@ -357,11 +456,24 @@ def test_pi(pi_id):
     return ok(pi_id=pi_id, pi_status=pi_client.ONLINE, message='Connection successful', pi_response=body)
 
 
+@app.route('/api/pi/<pi_id>/commands', methods=['GET'])
+def command_catalog(pi_id):
+    """The Pi's firmware command catalog (buttons, timeouts, home sequence)."""
+    device = store.get(pi_id)
+    if device is None:
+        return fail('Pi not found', 404)
+    try:
+        catalog = pi_client.commands(device)
+    except pi_client.PiError as e:
+        return fail(str(e), e.http_status)
+    return ok(pi_id=pi_id, **{k: catalog.get(k) for k in ('groups', 'home_sequence', 'default_timeout')})
+
+
 @app.route('/api/pi/<pi_id>/command', methods=['POST'])
 def send_command(pi_id):
     """
     Send one firmware command, e.g. {"command": "SXM,500", "timeout": 40}.
-    The optional timeout (seconds) is forwarded to the Pi.
+    timeout (seconds) is optional; without it the Pi's own COMMAND_TIMEOUT is used.
     """
     device = store.get(pi_id)
     if device is None:
@@ -379,26 +491,20 @@ def send_command(pi_id):
         # send two commands while the Pi waits for only one DONE, desyncing the link.
         return fail(f'Command must be one line, at most {MAX_COMMAND} characters', 400)
 
-    timeout = None
-    if data.get('timeout') not in (None, ''):
-        try:
-            timeout = float(data['timeout'])
-        except (TypeError, ValueError):
-            return fail(f"Invalid timeout value: {data['timeout']!r}", 400)
-        lo, hi = TIMEOUT_RANGE
-        if not lo <= timeout <= hi:
-            return fail(f'Timeout must be between {lo:g} and {hi:g} seconds', 400)
+    timeout, error = resolve_timeout(pi_id, data.get('timeout'))
+    if error:
+        return fail(error, 400)
 
-    # One command per device: the Arduino handles one blocking command at a time, and a
-    # second one (another tab, "Home all" overlapping a click) would only queue up on
-    # the Pi's serial lock and likely time out.
+    # One command per device: the Arduino handles one blocking command at a time. The Pi
+    # refuses a second one too (409), but checking here first saves the round trip.
     if not monitor.try_begin(pi_id, cmd):
         return fail(f'Busy running {monitor.running(pi_id)}', 409, busy=True)
     try:
         body = pi_client.send_command(device, cmd, timeout)
     except pi_client.PiError as e:
         monitor.set(pi_id, e.pi_status)
-        return fail(str(e), e.http_status, pi_status=monitor.status(pi_id))
+        return fail(str(e), e.http_status, pi_status=monitor.status(pi_id),
+                    busy=e.pi_status == pi_client.BUSY)
     finally:
         monitor.end(pi_id)
 
@@ -411,5 +517,6 @@ if __name__ == '__main__':
     # so it is off unless FLASK_DEBUG=1 is set for local development.
     debug = os.getenv('FLASK_DEBUG', '0').lower() in ('1', 'true', 'yes')
     log.info('Starting Motion Control Center on :5001 (debug=%s)', debug)
-    # threaded=True: a 40 s calibrate on one device must not block requests for others.
+    # Development only; Docker runs gunicorn (see Dockerfile).
+    # threaded=True: a long calibrate on one device must not block requests for others.
     app.run(host='0.0.0.0', port=5001, debug=debug, threaded=True)

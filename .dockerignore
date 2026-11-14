@@ -13,3 +13,8 @@ venv/
 .venv/
 
 beszel_data/
+
+tests/
+pytest.ini
+.pytest_cache/
+deploy/

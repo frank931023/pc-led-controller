@@ -11,3 +11,7 @@ venv/
 
 # Beszel hub 資料（帳號、歷史數據），執行期資料
 beszel_data/
+.pytest_cache/
+
+# Ansible 的實際 inventory（含每台 Pi 的 IP），範本是 deploy/ansible/inventory.example.yml
+deploy/ansible/inventory.yml

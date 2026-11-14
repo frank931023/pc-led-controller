@@ -1,0 +1,163 @@
+# Deploy the Arduino controller to every Pi in inventory.yml and register it in the
+# Motion Control Center. Safe to run again at any time (idempotent):
+#
+#   ansible-playbook site.yml                      # all Pis
+#   ansible-playbook site.yml --limit pi-03        # one Pi
+#   ansible-playbook site.yml -e pi_batch_size=1   # rolling, one Pi at a time
+#
+# Per Pi: Docker -> code -> .env -> docker compose up -> wait until healthy -> PUT into the
+# control center -> print the status the control center sees.
+- name: Deploy Pi controllers
+  hosts: pis
+  become: true
+  # Only -e works here: "serial" is evaluated before inventory / group_vars are loaded.
+  serial: "{{ pi_batch_size | default('100%') }}"
+
+  pre_tasks:
+    - name: Check that the control center is reachable
+      delegate_to: localhost
+      become: false
+      run_once: true
+      ansible.builtin.uri:
+        url: "{{ pc_url }}/api/health"
+      register: pc_health
+
+    - name: Fail early when the control center needs a token we do not have
+      run_once: true
+      ansible.builtin.assert:
+        that: not (pc_health.json.auth_required | bool) or pc_api_token | length > 0
+        fail_msg: The control center has API_TOKEN set; pass it with -e pc_api_token=...
+
+    - name: Get the Beszel agent settings from the control center
+      when: monitoring | bool
+      delegate_to: localhost
+      become: false
+      run_once: true
+      ansible.builtin.uri:
+        url: "{{ pc_url }}/api/beszel/agent-env"
+        headers: "{{ pc_auth_headers }}"
+      register: agent_env
+
+    - name: Refuse a hub URL the Pis cannot reach
+      when: monitoring | bool and (agent_env.json.warning | default('', true) | length > 0)
+      run_once: true
+      ansible.builtin.fail:
+        msg: "{{ agent_env.json.warning }} (set pc_url to the PC's LAN IP)"
+
+  tasks:
+    - name: Install Docker (only when missing)
+      ansible.builtin.shell: curl -fsSL https://get.docker.com | sh
+      args:
+        creates: /usr/bin/docker
+
+    - name: Install git
+      ansible.builtin.apt:
+        name: git
+        state: present
+        update_cache: true
+        cache_valid_time: 86400
+
+    - name: Check out the Pi project
+      ansible.builtin.git:
+        repo: "{{ pi_repo_url }}"
+        dest: "{{ pi_dir }}"
+        version: "{{ pi_repo_version }}"
+      register: checkout
+
+    - name: Check for USB serial devices
+      when: serial_port is not defined
+      ansible.builtin.stat:
+        path: /dev/serial/by-id
+      register: serial_dir
+
+    - name: Look for the Arduino in /dev/serial/by-id
+      when: serial_port is not defined and serial_dir.stat.exists
+      ansible.builtin.find:
+        paths: /dev/serial/by-id
+        file_type: link
+      register: serial_ids
+
+    - name: Choose the serial port
+      ansible.builtin.set_fact:
+        pi_serial_port: >-
+          {{ serial_port if serial_port is defined
+             else (serial_ids.files | default([]) | map(attribute='path') | first | default('/dev/ttyUSB0')) }}
+
+    - name: Warn when several USB serial devices are attached
+      when: serial_port is not defined and (serial_ids.matched | default(0)) > 1
+      ansible.builtin.debug:
+        msg: >-
+          {{ inventory_hostname }} has {{ serial_ids.matched }} USB serial devices; using {{ pi_serial_port }}.
+          Set serial_port for this host in inventory.yml if that is not the Arduino.
+
+    - name: Write the Pi's .env
+      ansible.builtin.template:
+        src: pi.env.j2
+        dest: "{{ pi_dir }}/.env"
+        mode: "0600"
+
+    - name: Pull the prebuilt image
+      when: pi_image | length > 0
+      ansible.builtin.command: docker compose pull arduino-controller
+      args:
+        chdir: "{{ pi_dir }}"
+      register: pull
+      changed_when: "'Pulled' in pull.stderr or 'Downloaded newer image' in pull.stderr"
+
+    - name: Start the containers
+      ansible.builtin.command: >-
+        docker compose up -d --remove-orphans {{ '' if pi_image else '--build' }}
+      args:
+        chdir: "{{ pi_dir }}"
+      environment:
+        # Default build attestations carry a timestamp, so every build would get a new image
+        # digest and recreate the container even when nothing changed.
+        BUILDX_NO_DEFAULT_ATTESTATIONS: "1"
+      register: up
+      changed_when: up.stderr is search('Recreated|Created|Started')
+
+    - name: Stop the monitoring agent when monitoring is off
+      when: not (monitoring | bool)
+      ansible.builtin.command: docker compose --profile monitoring rm --stop --force beszel-agent
+      args:
+        chdir: "{{ pi_dir }}"
+      register: agent_rm
+      changed_when: agent_rm.stderr is search('Removed')
+
+    - name: Wait until the Pi service answers
+      ansible.builtin.uri:
+        url: "http://127.0.0.1:{{ pi_port }}/api/health"
+      register: pi_health
+      until: pi_health.status == 200
+      retries: 30
+      delay: 2
+
+    - name: Register the Pi in the control center
+      delegate_to: localhost
+      become: false
+      ansible.builtin.uri:
+        url: "{{ pc_url }}/api/pi/{{ pi_id }}"
+        method: PUT
+        headers: "{{ pc_auth_headers }}"
+        body_format: json
+        body:
+          host: "{{ register_host }}"
+          port: "{{ pi_port | int }}"
+          name: "{{ pi_name }}"
+        status_code: [200, 201]
+      register: registered
+      changed_when: registered.status == 201
+
+    - name: Ask the control center how it sees the Pi
+      delegate_to: localhost
+      become: false
+      ansible.builtin.uri:
+        url: "{{ pc_url }}/api/pi/{{ pi_id }}"
+      register: seen
+
+    - name: Report
+      ansible.builtin.debug:
+        msg: >-
+          {{ pi_id }}: {{ seen.json.pi.status }}
+          · version {{ seen.json.pi.app_version }}
+          · serial {{ pi_serial_port }}

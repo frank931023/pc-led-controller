@@ -12,9 +12,11 @@
 5. [設定（.env）](#設定env)
 6. [資料存放](#資料存放)
 7. [API 端點](#api-端點)
-8. [故障排除](#故障排除)
-9. [設計備註與已知限制](#設計備註與已知限制)
-10. [相關文件](#相關文件)
+8. [用 Ansible 部署多台 Pi](#用-ansible-部署多台-pi)
+9. [測試](#測試)
+10. [故障排除](#故障排除)
+11. [設計備註與已知限制](#設計備註與已知限制)
+12. [相關文件](#相關文件)
 
 ---
 
@@ -47,7 +49,9 @@ pi_client.py        呼叫 Pi 的 HTTP（錯誤統一轉成 PiError，附帶這�
 beszel_client.py    Beszel：讀健康資料、與裝置清單雙向同步（背景每 10 秒）、產生 Pi agent 設定
 templates/index.html  頁面骨架
 static/style.css      樣式（沿用 ACQUA-Automation 的設計：主色 #009B85 + 白）
-static/app.js         前端邏輯（非阻塞 UI）
+static/app.js         前端邏輯（非阻塞 UI）；按鈕從每台 Pi 的指令表產生
+tests/                pytest（不需要 Pi 或 Beszel）
+deploy/ansible/       一次部署所有 Pi 並註冊到這裡（見下方「用 Ansible 部署多台 Pi」）
 docker-compose.yml    控制中心 + Beszel hub
 ```
 
@@ -67,8 +71,9 @@ docker compose down       # 停止
 
 開瀏覽器：
 
-- 控制中心：**http://\<PC 的 IP\>:5001**
-- Beszel：**http://\<PC 的 IP\>:8090**（帳密就是 `.env` 的 `BESZEL_EMAIL` / `BESZEL_PASSWORD`）
+- 控制中心：**http://\<PC 的 IP\>:5001**——日常只需要這個，健康數據與歷史圖表都在裡面
+- Beszel 管理頁：http://\<PC 的 IP\>:8090（帳密是 `.env` 的 `BESZEL_EMAIL` / `BESZEL_PASSWORD`），
+  只有要設定告警通知這類進階功能時才需要開
 
 > 修改程式或網頁之後要 `docker compose up -d --build`，見[故障排除](#改了程式或網頁但畫面沒變)。
 
@@ -86,9 +91,13 @@ python app.py
 
 1. PC：`.env` 設好 `BESZEL_PASSWORD`，`docker compose up -d`
 2. Windows PC：防火牆開放 **8090** 輸入連線（Pi 的 agent 要連進來），見 [Pi 健康監控](#第一次設定)
-3. 每台 Pi：照 Pi 專案 README 部署，`.env` 的 `PI_ID` 設成跟這裡的 Device ID 一樣（例如 `pi-01`）
-4. 網頁上 **+ Add** 新增每台 Pi
-5. （選用）網頁左側 **⚙** 取得 agent 設定，貼到每台 Pi 的 `.env` 啟用健康監控
+3. **多台 Pi（推薦）**：用 [Ansible](#用-ansible-部署多台-pi) 一次部署——自動產生每台的 `.env`、啟用健康監控、
+   註冊到這裡，第 4、5 步都不用做
+4. 手動的話：每台 Pi 照 Pi 專案 README 部署，`.env` 的 `PI_ID` 設成跟這裡的 Device ID 一樣（例如 `pi-01`），
+   再到網頁上 **+ Add** 新增
+5. （手動時選用）網頁左側 **⚙** 取得 agent 設定，貼到每台 Pi 的 `.env` 啟用健康監控
+
+> 裝置清單一開始是空的（舊版會預先放兩台寫死 IP 的範例裝置，換場域時會多出兩台不存在的 Pi）。
 
 ---
 
@@ -98,9 +107,9 @@ python app.py
 
 ```
 ┌──┬─────────────┬───────────────────────────────────────────────┐
-│◔ │ Devices  +Add│ floor c ✎                  Online  Test Remove │
-│⚙ │ ● floor c   │ pi-01 · 172.18.177.105:5000                    │
-│  │   CPU 12%   │ HEALTH  Agent CPU Memory Disk Temp Load Uptime │
+│⚙ │ Devices  +Add│ floor c ✎                  Online  Test Remove │
+│  │ ● floor c   │ pi-01 · 172.18.177.105:5000                    │
+│  │   CPU 12%   │ HEALTH  Agent CPU Memory … Uptime  History ▸   │
 │  │ ● front 1 a │ CONTROLS                                       │
 │  │             │ [X Axis] [Y Axis] [Z Axis] [Rotation]          │
 │  │             │ [Tilt] [LED Test]                              │
@@ -111,14 +120,14 @@ python app.py
 
 | 區塊 | 功能 |
 |---|---|
-| 左側欄 | **◔** 開 Beszel、**⚙** 健康監控設定、底部圓點 = 與控制中心伺服器的連線 |
+| 左側欄 | **⚙** 健康監控設定、底部圓點 = 與控制中心伺服器的連線 |
 | 裝置清單 | 點一台切換右邊面板；顯示狀態徽章、IP、CPU／溫度；正在跑指令時圓點變成轉圈 |
 | Home all devices | 每台依序 X → Y → Z → 旋轉歸位，裝置之間並行；某一軸失敗就停止那台，結束時顯示幾台成功／失敗 |
 | Test all connections | 測試所有裝置，結束時顯示「幾台 online」 |
-| 面板標題 | 點大標題直接改名（Enter 或點旁邊儲存、Esc 取消、清空 = 恢復原名） |
-| Health | Beszel 健康資料，見 [Pi 健康監控](#pi-健康監控beszel) |
-| Controls | X/Y/Z 軸 Calibrate／Home／Position／Move、Rotation、Tilt、LED Test；Move 欄位按 Enter 即送出 |
-| Custom command | 按鈕清單以外的韌體指令（例如除錯用），Enter 即送出 |
+| 面板標題 | 點大標題直接改名（Enter 或點旁邊儲存、Esc 取消、清空 = 恢復原名）；下方小字是正式名稱、位址、Pi 程式版本 |
+| Health | 目前的 CPU／記憶體／磁碟／溫度；**History** 開歷史圖表，見 [Pi 健康監控](#pi-健康監控beszel) |
+| Controls | X/Y/Z 軸 Calibrate／Home／Position／Move、Rotation、Tilt、LED Test；Move 欄位按 Enter 即送出。**按鈕、每個指令的逾時、Home all 的順序都來自那台 Pi 的指令表**（Pi 專案的 `commands.py`），所以永遠跟它的韌體一致 |
+| Custom command | 按鈕清單以外的韌體指令（例如除錯用），Enter 即送出；逾時用那台 Pi 的 `COMMAND_TIMEOUT` |
 | 指令紀錄 | 每台各自保留最近 30 筆；執行中顯示經過秒數；結果為 **Done** / **Out of range**（超出行程、沒有實際移動）/ **Unknown command**（韌體回 ERR）/ 錯誤原因 |
 
 ### 非阻塞操作
@@ -133,6 +142,7 @@ python app.py
 | 徽章 | 意義 | 該做什麼 |
 |---|---|---|
 | 🟢 **Online** | Pi 正常，且 Arduino 確實有回應 | 正常，可以控制 |
+| 🟢 **Busy** | Pi 正常，正在跑一個指令——可能是別的分頁、Home all，或**直接從 Pi 本機網頁 / 腳本送的** | 等它跑完；按鈕會鎖住，清單上顯示是哪個指令 |
 | 🟡 **No Arduino** | Pi 連得到，但 Arduino 不通 | 查那台 Pi 的 USB 線、`SERIAL_PORT`、`BAUD_RATE`、韌體 |
 | 🔴 **Offline** | 連不到 Pi 的 Flask | 查網路、IP、Pi 上的容器是否在跑 |
 | ⚪ **Checking** | 剛新增，第一次檢測還沒完成 | 等幾秒 |
@@ -178,7 +188,10 @@ python app.py
 - 裝置清單每台下面多一行 `CPU 12% · 48°C`
 - 裝置面板多一排 **Health**：Agent（Up/Down）、CPU、Memory、Disk、Temp、Load、Uptime。
   超過門檻變黃／紅：CPU 80/95%、記憶體與磁碟 85/95%、溫度 70/80°C。Agent 斷線時顯示的是最後一次收到的數值
-- **Charts in Beszel ↗** 直接開那台 Pi 在 Beszel 的頁面：歷史圖表、各容器資源用量、告警設定
+- **History** 在控制中心裡開歷史圖表（CPU、記憶體、磁碟、溫度、負載），可切換 1h / 12h / 24h / 1w / 30d，
+  滑鼠移到任一張圖上，所有圖會一起顯示同一時間點的數值；開著時每分鐘自動更新。
+  資料由控制中心用 `.env` 的帳密向 hub 取得，**不用另外登入 Beszel**。
+  中間有斷掉的地方 = 那段時間 Pi 或 agent 沒有回報
 - 名稱、新增、刪除兩邊會同步，見下方「與裝置清單同步」
 
 ### 第一次設定
@@ -252,7 +265,10 @@ python app.py
 |---|---|---|
 | `HOST_PORT` | 控制中心網頁 / API 連接埠（僅 Docker） | `5001` |
 | `CONFIG_FILE` | 裝置清單的位置（容器內路徑） | `/app/data/pi_config.json` |
-| `FLASK_DEBUG` | Flask debug 模式，**請保持 `0`** | `0` |
+| `FLASK_DEBUG` | Flask debug 模式（只影響 `python app.py`），**請保持 `0`** | `0` |
+| `API_TOKEN` | 選填。設定後，所有會改變東西的 API（和 agent 設定）都要帶 `Authorization: Bearer <API_TOKEN>`；網頁第一次操作時會要求輸入並記在瀏覽器裡 | 空（不驗證） |
+| `DEFAULT_COMMAND_TIMEOUT` / `MAX_COMMAND_TIMEOUT` | 指令逾時預設值與上限（秒）。每台 Pi 會在 `/api/status` 回報自己的值並以 Pi 為準，這兩個只在還沒成功檢測過那台時使用 | `130` / `300` |
+| `DOCKER_SUBNET` | Docker 內部網路的子網段，跟實體 LAN 撞網段時才需要改 | `192.168.250.0/24` |
 | `BESZEL_EMAIL` | Beszel 管理員帳號；控制中心也用它讀健康資料 | `admin@example.com` |
 | `BESZEL_PASSWORD` | Beszel 管理員密碼，**必填**（沒填 `docker compose up` 會直接報錯） | — |
 | `BESZEL_PORT` | Beszel 網頁連接埠 | `8090` |
@@ -308,12 +324,16 @@ python app.py
 
 | 方法 | 路徑 | 用途 |
 |---|---|---|
+| `GET` | `/api/health` | 服務存活檢查（Docker healthcheck / Ansible），回報是否需要 token |
 | `GET` | `/api/pis` | 所有裝置 + 狀態 + 健康資料（從記憶體回傳，不等 Pi） |
-| `GET` | `/api/pi/<id>` | 單一裝置，當下即時檢測（最多等 3 秒） |
+| `GET` | `/api/pi/<id>` | 單一裝置，當下即時檢測（最多等 8 秒） |
 | `POST` | `/api/pi` | 新增裝置（可直接綁定 Beszel 系統） |
+| `PUT` | `/api/pi/<id>` | 建立或更新裝置（部署工具用，可重複執行） |
+| `GET` | `/api/pi/<id>/commands` | 那台 Pi 的指令表（按鈕、逾時、Home all 順序） |
 | `PATCH` | `/api/pi/<id>` | 修改 `alternative_name` |
 | `DELETE` | `/api/pi/<id>` | 移除裝置（`?beszel=1` 連同 Beszel 系統一起刪） |
 | `POST` | `/api/pi/<id>/beszel` | 綁定 / 解除綁定 Beszel 系統 |
+| `GET` | `/api/pi/<id>/health/history` | 健康數據歷史（網頁的 History 圖表） |
 | `GET`/`POST` | `/api/pi/<id>/test` | 測試連線（請 Arduino 回應一次） |
 | `POST` | `/api/pi/<id>/command` | 送韌體指令 |
 | `GET` | `/api/beszel` | 健康監控狀態 + 未綁定的 agent |
@@ -324,13 +344,18 @@ python app.py
 ```json
 { "status": "success", "pis": { "pi-01": {
     "host": "172.18.177.105", "port": 5000, "name": "pi-01", "alternative_name": "floor c",
-    "status": "online", "running": null,
+    "status": "online", "running": null, "checked_ago": 2.1,
+    "app_version": "main@1a2b3c4", "rig_name": "Ceiling Rig Front",
+    "command_timeout": 130, "max_command_timeout": 300,
     "health": { "status": "up", "cpu": 12.3, "mem": 41.0, "disk": 23.5, "temp": 48.2,
                 "uptime": 86400, "load": 0.42, "agent_version": "0.21.1", "system_id": "..." } } } }
 ```
 
-- `status`：`online` / `no-arduino` / `offline` / `checking`（剛新增、還沒檢測完）
-- `running`：這台正在跑的指令（例如 `"SXC"`），沒有則為 `null`
+- `status`：`online` / `busy` / `no-arduino` / `offline` / `checking`（剛新增、還沒檢測完）
+- `running`：這台正在跑的指令（例如 `"SXC"`），包含不是從這裡送的（Pi 本機網頁、腳本）；沒有則為 `null`
+- `checked_ago`：距離上次檢測幾秒。只要有任何 API 呼叫（網頁、腳本、Ansible），背景每 5 秒檢測一次；
+  30 秒沒有任何 API 呼叫就暫停，所以這個數字變大代表狀態可能過時了
+- `app_version`、`rig_name`、`command_timeout`、`max_command_timeout`：那台 Pi 上次回報的資訊
 - `health`：綁定的 Beszel 系統的健康資料；沒有綁定或沒開健康監控時為 `null`。`temp` 沒有感測器時為 `null`
 - 回應最外層另有 `beszel`（同 `GET /api/beszel`），網頁每 5 秒用它更新 Unlinked agents
 
@@ -346,6 +371,21 @@ python app.py
 - `beszel_system_id`（選填）：直接綁定到這個 Beszel 系統（網頁的 Unlinked agents → **Add** 就是用這個）；
   系統不存在或已經綁給別台時回 `400`
 - **立即回傳**，`status` 為 `checking`，連線檢測在背景進行
+
+### `PUT /api/pi/<id>`
+
+部署工具（Ansible）用：裝置不存在就建立（回 `201`），存在就更新（回 `200`）。可以重複執行。
+
+```json
+{ "host": "192.168.1.100", "port": 5000, "name": "pi-01" }
+```
+
+- 只會改 body 裡有的欄位：網頁上設的 `alternative_name`、Beszel 綁定都會保留
+- 驗證規則同 `POST /api/pi`；回應含 `created`（`true` = 這次新建的）
+
+### `GET /api/pi/<id>/commands`
+
+轉發那台 Pi 的 `/api/commands`（格式見 Pi 專案 README），網頁用它產生按鈕。Pi 連不到時回 `502` / `504`。
 
 ### `PATCH /api/pi/<id>`
 
@@ -384,7 +424,7 @@ python app.py
 { "status": "error", "pi_status": "no-arduino", "error": "SERIAL_DISCONNECTED" }
 ```
 
-該台正在跑指令時回 `409`（Serial 被佔用，測了也只會逾時）。
+該台正在跑指令時回 `409`（不論指令是從這裡還是從 Pi 本機送的）。
 
 ### `POST /api/pi/<id>/command`
 
@@ -394,10 +434,12 @@ python app.py
 { "command": "SXC", "timeout": 40 }
 ```
 
-- `timeout`（選填，1–120 秒）原樣轉發給 Pi，覆蓋等待 Arduino 回應的上限；不帶則用 10 秒。
-  校正、歸位在真機低速模式可能超過 30 秒，網頁按鈕已依指令類型帶好合適的值
+- `timeout`（選填，秒）：等待 Arduino 回應的上限。**不帶就用那台 Pi 回報的 `COMMAND_TIMEOUT`**（預設 130），
+  上限是 Pi 回報的 `MAX_COMMAND_TIMEOUT`（預設 300）。PC 一定會把確定的數字轉發給 Pi，並且多等 5 秒，
+  兩邊的逾時永遠一致
 - 指令必須是**單行**、最多 64 字元（原因見[設計備註](#設計備註)）
-- **同一台同時只能跑一個指令**：前一個還沒結束時再送，立即回 `409`（`"busy": true`），不會排隊卡在 Pi 的 Serial 鎖上
+- **同一台同時只能跑一個指令**：前一個還沒結束時再送，立即回 `409`（`"busy": true`）。
+  Pi 本身也會檢查，所以從 Pi 本機網頁或腳本送的指令一樣擋得住
 
 成功時 Pi 的回應原樣放在 `pi_response`：
 
@@ -419,15 +461,31 @@ python app.py
 
 ```json
 { "status": "success", "beszel": {
-    "enabled": true, "connected": true, "error": null, "systems": 3, "url": "http://172.18.177.10:8090",
+    "enabled": true, "connected": true, "error": null, "systems": 3,
     "unlinked": [ { "system_id": "h6jr5of5mg7mc7z", "name": "pi-03", "host": "...", "status": "up" } ] } }
 ```
 
 `unlinked`：Beszel 裡有、但沒有綁定到任何裝置的系統。
 
+### `GET /api/pi/<id>/health/history`
+
+`?range=1h`（預設）/ `12h` / `24h` / `1w` / `30d`。對應 Beszel 存的平均值：1h 每 1 分鐘一筆、12h 每 10 分鐘、
+24h 每 20 分鐘、1w 每 2 小時、30d 每 8 小時。
+
+```json
+{ "status": "success", "pi_id": "pi-01", "range": "1h", "ranges": ["1h", "12h", "24h", "1w", "30d"],
+  "from": 1767320000, "to": 1767323600, "interval": 60,
+  "points": [ { "t": 1767323045, "cpu": 12.5, "mem": 40.1, "disk": 7.7, "temp": 51.2, "load": 0.42 } ] }
+```
+
+- 時間都是 Unix timestamp；`from` / `to` 是整個區間，`points` 由舊到新
+- `temp` 取最熱的感測器，沒有感測器時為 `null`
+- `404`：裝置不存在，或沒有綁定 agent；`400`：range 不對或沒開健康監控；`502`：連不到 hub
+
 ### `GET /api/beszel/agent-env`
 
-回傳給 Pi `.env` 的四行（`COMPOSE_PROFILES`、`BESZEL_HUB_URL`、`BESZEL_KEY`、`BESZEL_TOKEN`）。
+回傳給 Pi `.env` 的四行（`env`：`COMPOSE_PROFILES`、`BESZEL_HUB_URL`、`BESZEL_KEY`、`BESZEL_TOKEN`），
+另外也分開回傳 `hub_url`、`key`、`token` 給 Ansible 使用。有設 `API_TOKEN` 時需要 token（內含 Beszel 註冊 token）。
 第一次呼叫時會在 hub 建立永久 universal token。頁面是用 localhost 開的話，`warning` 會提醒 `HUB_URL` 不能用。
 
 ### 狀態碼
@@ -435,15 +493,46 @@ python app.py
 | 狀態碼 | 意義 |
 |---|---|
 | `200` | 成功 |
+| `201` | `PUT /api/pi/<id>` 新建了裝置 |
 | `400` | 請求有問題：body 不是 JSON 物件、欄位缺失或格式錯、裝置 ID 重複（錯誤訊息會說是哪一種） |
+| `401` | 有設 `API_TOKEN`，但請求沒帶或帶錯 `Authorization: Bearer <API_TOKEN>` |
 | `404` | 找不到該裝置；`/api/` 底下不存在的路徑也一律回 JSON |
-| `409` | 該裝置正在跑另一個指令 |
+| `409` | 該裝置正在跑另一個指令（從這裡或從 Pi 本機送的） |
 | `500` | 伺服器內部錯誤，或裝置清單存檔失敗（細節在伺服器 log） |
 | `502` | 連不到 Pi、Pi 回報錯誤（含 Arduino 斷線），或連不到 Beszel |
 | `504` | 連線 Pi 逾時 |
 
 錯誤回應裡有 `pi_status` 時，代表這次失敗讓伺服器更新了裝置狀態。Pi 回 `4xx`（例如 Pi 看不懂請求）時不改狀態——
 Pi 有回應，就不該被標成離線。
+
+---
+
+## 用 Ansible 部署多台 Pi
+
+`deploy/ansible/` 對 inventory 裡的每台 Pi：裝 Docker → 取得程式碼或拉 image → 自動找 Arduino 的序列埠 →
+產生 `.env`（含健康監控設定，從這裡的 `/api/beszel/agent-env` 取得）→ 啟動 → 等健康檢查 →
+`PUT /api/pi/<id>` 註冊到這裡。可以重複執行，沒有變更時不會動到任何東西。
+
+```bash
+cd deploy/ansible
+cp inventory.example.yml inventory.yml && nano inventory.yml
+ansible-playbook site.yml
+```
+
+第一次設定（裝 WSL / Ansible、SSH key、建立 inventory、部署、疑難排解）照 [`deploy/ansible/TUTORIAL.md`](deploy/ansible/TUTORIAL.md) 一步步做；
+指令與變數速查見 [`deploy/ansible/README.md`](deploy/ansible/README.md)。
+
+---
+
+## 測試
+
+```bash
+pip install -r requirements.txt pytest
+python -m pytest
+```
+
+不需要 Pi 或 Beszel hub：涵蓋裝置清單 upsert、逾時決定方式、Pi 的 busy / 409 對應、指令表轉發、健康歷史資料轉換、API token。
+Pi 端的序列埠協定測試在 Pi 專案裡。
 
 ---
 
@@ -482,7 +571,17 @@ curl http://localhost:5000/api/ping
 
 ### 指令顯示 Busy
 
-那台裝置正在跑另一個指令（可能是別的分頁或 Home all）。等它結束即可；清單上那台的圓點會轉圈。
+那台裝置正在跑另一個指令（可能是別的分頁、Home all，或有人在 Pi 本機網頁上操作）。等它結束即可；
+清單上那台的圓點會轉圈，面板上的按鈕也會鎖住。
+
+### Controls 顯示「Cannot load the controls from this Pi」
+
+那台 Pi 的程式是舊版，還沒有 `/api/commands`。更新那台 Pi（`git pull && docker compose up -d --build`，
+或重跑 Ansible）即可。
+
+### 網頁跳出「API token required」
+
+控制中心的 `.env` 設了 `API_TOKEN`。輸入同一個值，瀏覽器會記住；輸入錯誤時下次操作會再問一次。
 
 ### Health 顯示「Not linked to a monitoring agent」
 
@@ -539,7 +638,7 @@ Dockerfile 是 `COPY . .`，程式、`templates/`、`static/` 是 build 時**烤
 docker compose up -d --build
 ```
 
-直接用 `python app.py` 跑時，非 debug 模式下 Flask 會快取模板，一樣要重啟。
+直接用 `python app.py` 跑時，非 debug 模式下 Flask 會快取模板，一樣要重啟。（Docker 裡是 gunicorn。）
 JS/CSS 網址帶有版本號，重啟後瀏覽器一定會拿到新檔案，不需要清快取。
 
 ---
@@ -548,11 +647,17 @@ JS/CSS 網址帶有版本號，重啟後瀏覽器一定會拿到新檔案，不�
 
 ### 設計備註
 
-- **狀態檢測在背景、並行**：`/api/pis` 直接回記憶體裡的結果，頁面永遠不用等離線 Pi 的 3 秒逾時；
-  多開幾個分頁也不會多送查詢給 Arduino。30 秒沒有任何網頁在看就暫停輪詢。
-- **正在跑指令的裝置不檢測**：Pi 回答 `/api/status` 時要透過同一個 Serial 送 `?`，必須等指令的 Serial 鎖。
-  40 秒的 Calibrate 跑到一半時去檢測必定逾時，裝置會被誤判成 Offline。所以 `monitor.py` 同時管理
-  「每台一個指令」的鎖，忙碌中的裝置跳過檢測；檢測途中開始指令或收到更新的狀態時，那次結果也會被丟棄。
+- **狀態檢測在背景、每台各自獨立**：`/api/pis` 直接回記憶體裡的結果，頁面永遠不用等離線 Pi 的逾時；
+  多開幾個分頁也不會多送查詢給 Arduino。每台的檢測互不等待——一台離線、要等滿 8 秒逾時，
+  不會拖慢其他台的 5 秒更新。30 秒沒有任何 API 呼叫就暫停輪詢。
+- **Busy 由 Pi 回報**：Pi 有指令在跑時，`/api/status` 不碰序列埠、直接回 `busy` 和指令名稱，所以從 Pi 本機網頁
+  送的長指令也不會讓這裡誤判成 Offline。這裡送出的指令期間則完全跳過檢測；檢測途中開始指令或收到更新的狀態時，
+  那次結果也會被丟棄。
+- **逾時以 Pi 為準，而且一定明確轉發**：以前 PC 沒帶 timeout 時只等 15 秒，Pi 卻預設等 130 秒——PC 先放棄、
+  把裝置標成 Offline、放掉指令鎖，下一個指令再卡在 Pi 上。現在 PC 從 `/api/status` 讀 Pi 的
+  `COMMAND_TIMEOUT` / `MAX_COMMAND_TIMEOUT`，每次都把確定的數字轉發給 Pi，自己多等 5 秒。
+- **指令表由 Pi 提供**：按鈕、逾時、Home all 順序來自每台 Pi 的 `/api/commands`，PC 與 Pi 本機網頁不再各自
+  維護一份；不同 Pi 燒了不同韌體也能各自顯示正確的按鈕。
 - **指令限制單行**：Pi 會在指令後面補換行字元、原樣寫進 Serial。指令裡夾著換行的話會一次送出兩個指令，
   Pi 卻只等一個 `DONE`，之後的回應就全部錯位。
 - **`timeout + 5` 秒緩衝**：PC 等 Pi 的時間比轉發給 Pi 的 `timeout` 多 5 秒，讓 Pi 有機會先回報明確的錯誤
@@ -576,12 +681,12 @@ JS/CSS 網址帶有版本號，重啟後瀏覽器一定會拿到新檔案，不�
 
 ### 已知限制
 
-- **必須是單一程序**：狀態快取和指令鎖都在記憶體裡。目前用 Flask 內建伺服器（`threaded=True`）沒問題；
-  日後改用 gunicorn 只能開 **1 個 worker**（用 `--threads` 增加並行），多個 worker 會各自上鎖，同一台可能同時收到兩個指令。
-- **「每台一個指令」只管得到經過這台 PC 的指令**：直接呼叫 Pi 的 API 或用 Pi 的本機網頁送指令時，PC 端不會知道
-  （會在 Pi 的 Serial 鎖上排隊）。
+- **必須是單一程序**：狀態快取和指令鎖都在記憶體裡。Docker 裡用 gunicorn **1 個 worker** + 16 threads；
+  不要調高 worker 數，多個 worker 會各自上鎖、各自輪詢。
 - **指令紀錄只存在瀏覽器分頁的記憶體裡**：重新整理就會清空。
-- **沒有登入機制**：連得到 5001 的人都能控制機台，請只在受信任的區網使用。
+- **`API_TOKEN` 只是共用密碼**：沒有使用者帳號，也沒有 HTTPS；讀取類的 API（狀態、健康資料）不需要 token。
+  請只在受信任的區網使用。Pi 的 API 本身沒有驗證。
+- **Ansible 不會刪除裝置**：從 inventory 拿掉的 Pi 要在網頁上 Remove。
 
 ---
 

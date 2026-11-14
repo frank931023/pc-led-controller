@@ -10,7 +10,6 @@
 <div class="shell">
   <nav class="nav">
     <div class="logo">M</div>
-    <a id="nav-beszel" href="#" target="_blank" rel="noopener" title="Open Beszel (Pi health dashboard)" hidden>◔</a>
     <button class="navb" data-action="open-monitoring" title="Monitoring setup">⚙</button>
     <div class="sp"></div>
     <div class="st" id="nav-dot" title="Server connection"></div>
@@ -76,6 +75,21 @@
   </div>
 </div>
 
+<!-- API token (only shown when the server has API_TOKEN set) -->
+<div class="ov" id="token-ov">
+  <form class="bx" id="token-form" autocomplete="off">
+    <h3>API token required</h3>
+    <p>This control center is protected. Enter the <code>API_TOKEN</code> from its <code>.env</code>.
+       It is remembered in this browser.</p>
+    <label for="token-input">API token</label>
+    <input type="password" id="token-input" required>
+    <div class="acts">
+      <button type="button" class="ghost" id="token-cancel">Cancel</button>
+      <button type="submit" class="primary">Save</button>
+    </div>
+  </form>
+</div>
+
 <!-- Monitoring (Beszel agent) setup -->
 <div class="ov" id="mon-ov">
   <div class="bx wide">
@@ -96,6 +110,19 @@
       </ol>
     </div>
     <div class="acts"><button class="ghost" data-action="close-monitoring">Close</button></div>
+  </div>
+</div>
+
+<!-- Health history charts (data from GET /api/pi/<id>/health/history) -->
+<div class="ov" id="chart-ov">
+  <div class="bx xl">
+    <div class="ch-head">
+      <h3 id="chart-title">Health history</h3>
+      <div class="seg" id="chart-ranges"></div>
+    </div>
+    <p id="chart-state"></p>
+    <div class="charts" id="charts"></div>
+    <div class="acts"><button class="ghost" data-action="close-charts">Close</button></div>
   </div>
 </div>
 

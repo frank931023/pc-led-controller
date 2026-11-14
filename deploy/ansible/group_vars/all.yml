@@ -1,0 +1,36 @@
+# Settings shared by every Pi. Override per Pi in inventory.yml, or on the command line:
+#   ansible-playbook site.yml -e pc_url=http://172.18.177.10:5001
+
+# Motion Control Center on the PC, as reachable from the machine running Ansible.
+# ⚠ Use the PC's LAN IP, not localhost: the Beszel hub URL handed to the Pis is derived from it.
+pc_url: http://172.18.177.10:5001
+# Same value as API_TOKEN in the control center's .env (empty if it has none).
+# Better kept out of git: ansible-playbook site.yml -e pc_api_token=...  or ansible-vault.
+pc_api_token: ""
+
+# Where the Pi project lives on each Pi, and which version to deploy.
+pi_repo_url: https://github.com/frank931023/pi-arduino-connection-test-0717.git
+pi_repo_version: main
+pi_dir: /opt/pi-arduino-controller
+
+# Prebuilt image from CI (much faster than building on every Pi). Empty = build on the Pi.
+#   pi_image: ghcr.io/frank931023/pi-arduino-connection-test-0717:main
+pi_image: ""
+
+# Pi service settings (see the Pi project's .env.example)
+pi_id: "{{ inventory_hostname }}"
+pi_name: "{{ inventory_hostname }}"
+pi_port: 5000
+register_host: "{{ ansible_host }}"
+baud_rate: 115200
+command_timeout: 130
+max_command_timeout: 300
+
+# Health monitoring: fetch the Beszel agent settings from the control center and
+# start the agent on every Pi. false = stop and remove the agent.
+monitoring: true
+
+# Rolling updates (how many Pis at a time) are set on the command line only:
+#   ansible-playbook site.yml -e pi_batch_size=1
+
+pc_auth_headers: "{{ {'Authorization': 'Bearer ' ~ pc_api_token} if pc_api_token else {} }}"

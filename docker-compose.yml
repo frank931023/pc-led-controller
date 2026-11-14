@@ -23,6 +23,9 @@ services:
       - BESZEL_PASSWORD=${BESZEL_PASSWORD:-}
       - BESZEL_PORT=${BESZEL_PORT:-8090}
       - BESZEL_PUBLIC_URL=${BESZEL_PUBLIC_URL:-}
+      - API_TOKEN=${API_TOKEN:-}
+      - DEFAULT_COMMAND_TIMEOUT=${DEFAULT_COMMAND_TIMEOUT:-130}
+      - MAX_COMMAND_TIMEOUT=${MAX_COMMAND_TIMEOUT:-300}
 
     depends_on:
       - beszel
@@ -51,9 +54,9 @@ services:
 
 # 固定子網段，避免 Docker 自動選到跟公司/家裡 LAN 撞網段的範圍（例如這裡曾撞到
 # 172.18.0.0/16，剛好把實體 LAN 上的 172.18.177.0/25 也框進去，導致容器對外連線
-# 全部被本機的 bridge 網路攔截，出現 "No route to host"）。
+# 全部被本機的 bridge 網路攔截，出現 "No route to host"）。到其他場域又撞網段時改 .env 的 DOCKER_SUBNET。
 networks:
   default:
     ipam:
       config:
-        - subnet: 192.168.250.0/24
+        - subnet: ${DOCKER_SUBNET:-192.168.250.0/24}

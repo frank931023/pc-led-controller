@@ -7,7 +7,7 @@
  *  - Every request goes through api(): it never throws, always times out, and turns
  *    network errors / non-JSON answers into a readable message.
  *  - A command only locks *its own* device. Other devices, renaming, adding, testing
- *    and switching devices all stay usable while a 40 s calibrate is running.
+ *    and switching devices all stay usable while a long calibrate is running.
  *  - The 5 s refresh only patches the parts that changed, so typed input
  *    (move values, custom command, rename) is never wiped.
  *  - No window.confirm / alert: dialogs are in-page.
@@ -15,38 +15,13 @@
 
 // ===== Config =====
 
-// timeout (s) is forwarded PC -> Pi -> Arduino wait limit. Calibrate/home may take
-// over 30 s on real hardware, so they get a generous value.
-const GROUPS = [
-  { title: 'X Axis', range: '0 – 1000 mm',
-    actions: [{ cmd: 'SXC', label: 'Calibrate', timeout: 40 }, { cmd: 'SXH', label: 'Home', timeout: 40 },
-              { cmd: 'SXP', label: 'Position', timeout: 10 }],
-    move: { prefix: 'SXM', label: 'Move', unit: 'mm', timeout: 40 } },
-  { title: 'Y Axis', range: '0 – 1000 mm',
-    actions: [{ cmd: 'SYC', label: 'Calibrate', timeout: 40 }, { cmd: 'SYH', label: 'Home', timeout: 40 },
-              { cmd: 'SYP', label: 'Position', timeout: 10 }],
-    move: { prefix: 'SYM', label: 'Move', unit: 'mm', timeout: 40 } },
-  { title: 'Z Axis', range: '0 – 300 mm',
-    actions: [{ cmd: 'SZC', label: 'Calibrate', timeout: 40 }, { cmd: 'SZH', label: 'Home', timeout: 40 },
-              { cmd: 'SZP', label: 'Position', timeout: 10 }],
-    move: { prefix: 'SZM', label: 'Move', unit: 'mm', timeout: 40 } },
-  { title: 'Rotation', range: '-180° – 180°',
-    actions: [{ cmd: 'RC', label: 'Calibrate', timeout: 40 }, { cmd: 'RH', label: 'Home', timeout: 40 },
-              { cmd: 'RP', label: 'Angle', timeout: 40 }],
-    move: { prefix: 'RM', label: 'Rotate', unit: '°', timeout: 40 } },
-  { title: 'Tilt', range: '0° – 90°',
-    actions: [{ cmd: 'TP', label: 'Angle', timeout: 40 }],
-    move: { prefix: 'TM', label: 'Tilt', unit: '°', timeout: 20 } },
-  { title: 'LED Test', range: '',
-    actions: [{ cmd: 'L0', label: 'All off', timeout: 5 }, { cmd: 'L1', label: 'Action', timeout: 5 },
-              { cmd: 'L2', label: 'Status', timeout: 5 }, { cmd: 'L3', label: 'All on', timeout: 5 }] },
-];
-const HOME_SEQUENCE = ['SXH', 'SYH', 'SZH', 'RH'];
-const CUSTOM_TIMEOUT = 20;
+// The buttons, their timeouts and the "Home all" sequence come from each Pi
+// (GET /api/pi/<id>/commands -> the Pi's commands.py), so they always match its firmware.
 const POLL_MS = 5000;
 const HISTORY_MAX = 30;
 const ID_RE = /^[A-Za-z0-9_.-]{1,32}$/;                 // same rule as the server
-const STATUS_TEXT = { online: 'Online', 'no-arduino': 'No Arduino', offline: 'Offline', checking: 'Checking' };
+const STATUS_TEXT = { online: 'Online', busy: 'Busy', 'no-arduino': 'No Arduino', offline: 'Offline', checking: 'Checking' };
+const TOKEN_KEY = 'mcc-api-token';
 
 // ===== State =====
 
@@ -55,9 +30,14 @@ const state = {
   selected: null,
   history: {},        // id -> [{ cmd, text, cls, lines, at, pending }], newest first
   running: {},        // id -> { cmd, startedAt } for commands started from this tab
+  catalogs: {},       // id -> command catalog from that Pi (GET /api/pi/<id>/commands)
+  catalogErrors: {},  // id -> why the last catalog fetch failed
+  loading: {},        // id -> true while the catalog is being fetched
   renaming: false,
   serverUp: true,
-  beszel: null,       // { enabled, connected, error, url } from /api/beszel
+  beszel: null,       // { enabled, connected, error, unlinked } from /api/pis
+  charts: null,       // { id, data, timer } while the health history dialog is open
+  chartRange: '1h',   // last range picked in that dialog
   refreshing: false,
 };
 
@@ -83,20 +63,63 @@ const busyCmd = (id) => (state.running[id] && state.running[id].cmd)
 
 const clock = (d) => d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
 
+// ----- API token (only when the server sets API_TOKEN) -----
+
+function storedToken() {
+  try { return localStorage.getItem(TOKEN_KEY) || ''; } catch { return ''; }
+}
+
+function storeToken(token) {
+  try { localStorage.setItem(TOKEN_KEY, token); } catch { /* private mode: ask again next time */ }
+}
+
+let tokenPrompt = null;   // one dialog even when several requests get 401 at once
+
+/** Ask for the API token. Resolves to the token, or '' when cancelled. */
+function askToken() {
+  if (tokenPrompt) return tokenPrompt;
+  tokenPrompt = new Promise((resolve) => {
+    const ov = $('#token-ov');
+    const input = $('#token-input');
+    input.value = '';
+    const done = (token) => {
+      ov.classList.remove('on');
+      $('#token-form').onsubmit = $('#token-cancel').onclick = null;
+      ov.cancel = null;
+      tokenPrompt = null;
+      if (token) storeToken(token);
+      resolve(token);
+    };
+    $('#token-form').onsubmit = (e) => { e.preventDefault(); done(input.value.trim()); };
+    $('#token-cancel').onclick = () => done('');
+    ov.cancel = () => done('');                 // used by Escape / backdrop click
+    ov.classList.add('on');
+    input.focus();
+  });
+  return tokenPrompt;
+}
+
 /**
  * fetch wrapper. Never throws. Resolves to { ok, status, data, error }.
  * ok is true only for HTTP 2xx with {"status": "success"}.
+ * A 401 asks for the API token once and repeats the request with it.
  */
-async function api(method, path, body, timeoutMs = 10000) {
+async function api(method, path, body, timeoutMs = 10000, retried = false) {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
+    const headers = body ? { 'Content-Type': 'application/json' } : {};
+    if (storedToken()) headers.Authorization = `Bearer ${storedToken()}`;
     const resp = await fetch(path, {
       method,
-      headers: body ? { 'Content-Type': 'application/json' } : {},
+      headers,
       body: body ? JSON.stringify(body) : undefined,
       signal: ctrl.signal,
     });
+    if (resp.status === 401 && !retried) {
+      clearTimeout(timer);
+      if (await askToken()) return api(method, path, body, timeoutMs, true);
+    }
     const text = await resp.text();
     let data;
     try { data = JSON.parse(text); } catch {
@@ -176,7 +199,7 @@ function renderList() {
   }).join('') + unlinkedHtml();
 }
 
-/** Beszel agents that belong to no device, listed under the devices. */
+/** Monitoring agents (Beszel systems) that belong to no device, listed under the devices. */
 function unlinkedHtml() {
   const list = (state.beszel && state.beszel.unlinked) || [];
   if (!list.length) return '';
@@ -186,30 +209,71 @@ function unlinkedHtml() {
       ${list.map((u) => `
         <div class="dv static">
           <span class="dot ${u.status === 'up' ? 'online' : 'offline'}"></span>
-          <div class="t"><b>${esc(u.name)}</b><small>Beszel agent · ${esc(u.status)}</small></div>
+          <div class="t"><b>${esc(u.name)}</b><small>Monitoring agent · ${esc(u.status)}</small></div>
           <button class="ghost sm" data-action="add-from-agent" data-sid="${esc(u.system_id)}"
             data-name="${esc(u.name)}" title="Create a device linked to this agent">Add</button>
         </div>`).join('')}
-      <p class="hint">Agents reporting to Beszel that no device is linked to. Add one as a device,
+      <p class="hint">Pis reporting health data that no device is linked to. Add one as a device,
         or link it from a device's Health section.</p>
     </div>`;
 }
 
 function groupHtml(g) {
   const buttons = g.actions.map((a) => `
-    <button class="cmd" data-action="cmd" data-cmd="${a.cmd}" data-timeout="${a.timeout}" title="${a.cmd}">${a.label}</button>`).join('');
+    <button class="cmd" data-action="cmd" data-cmd="${esc(a.cmd)}" data-timeout="${a.timeout}" title="${esc(a.cmd)}">${esc(a.label)}</button>`).join('');
   const move = g.move ? `
     <div class="mv">
-      <input type="number" step="any" id="mv-${g.move.prefix}" placeholder="${g.move.unit}" data-enter="move-${g.move.prefix}">
-      <button class="cmd primary" id="move-${g.move.prefix}" data-action="move"
-        data-prefix="${g.move.prefix}" data-timeout="${g.move.timeout}" title="${g.move.prefix},&lt;value&gt;">${g.move.label}</button>
+      <input type="number" step="any" id="mv-${esc(g.move.prefix)}" placeholder="${esc(g.move.unit)}" data-enter="move-${esc(g.move.prefix)}">
+      <button class="cmd primary" id="move-${esc(g.move.prefix)}" data-action="move"
+        data-prefix="${esc(g.move.prefix)}" data-timeout="${g.move.timeout}" title="${esc(g.move.prefix)},&lt;value&gt;">${esc(g.move.label)}</button>
     </div>` : '';
   return `
     <div class="grp">
-      <div class="gh"><b>${g.title}</b><span>${g.range}</span></div>
+      <div class="gh"><b>${esc(g.title)}</b><span>${esc(g.range)}</span></div>
       <div class="btns">${buttons}</div>
       ${move}
     </div>`;
+}
+
+/** Fill the Controls area of the selected device from its catalog. */
+function renderControls() {
+  const el = $('#groups');
+  if (!el) return;
+  const catalog = state.catalogs[state.selected];
+  if (catalog) {
+    el.innerHTML = catalog.groups.map(groupHtml).join('');
+  } else {
+    const error = state.catalogErrors[state.selected];
+    const text = state.loading[state.selected] ? 'Loading controls…'
+      : error ? `Cannot load the controls from this Pi: ${esc(error)}`
+      : 'Controls appear once this Pi is reachable.';
+    el.innerHTML = `<div class="empty">${text}</div>`;
+  }
+  renderBusy();
+}
+
+/** Fetch a device's command catalog once it is reachable. Resolves to the catalog or null. */
+async function loadCatalog(id) {
+  if (state.catalogs[id]) return state.catalogs[id];
+  if (state.loading[id]) return null;
+  state.loading[id] = true;
+  const res = await api('GET', `/api/pi/${encodeURIComponent(id)}/commands`);
+  delete state.loading[id];
+  if (res.ok) {
+    state.catalogs[id] = res.data;
+    delete state.catalogErrors[id];
+  } else {
+    state.catalogErrors[id] = res.error;
+  }
+  if (id === state.selected) renderControls();
+  return state.catalogs[id] || null;
+}
+
+/** Timeout (s) the Pi's catalog gives a command, falling back to its default. */
+function timeoutFor(catalog, cmd) {
+  const actions = catalog.groups.flatMap((g) => g.actions);
+  const action = actions.find((a) => a.cmd === cmd);
+  return action ? action.timeout : catalog.default_timeout;
 }
 
 /** Full re-render of the right panel. Only on device switch / add / remove. */
@@ -232,7 +296,7 @@ function renderDetail() {
     </div>
     <div class="health" id="health"></div>
     <h2>Controls</h2>
-    <div class="grow"><div class="groups">${GROUPS.map(groupHtml).join('')}</div></div>
+    <div class="grow"><div class="groups" id="groups"></div></div>
     <div class="custom">
       <input type="text" id="custom" placeholder="Custom command" maxlength="64" data-enter="custom-send">
       <button class="cmd" id="custom-send" data-action="custom">Send</button>
@@ -241,7 +305,8 @@ function renderDetail() {
   updateHeader();
   renderHealth();
   renderHistory();
-  renderBusy();
+  loadCatalog(id);      // marks the device as loading before the first paint
+  renderControls();
 }
 
 /** Patch name / address / badge in place (keeps inputs and the rename box alive). */
@@ -250,7 +315,7 @@ function updateHeader() {
   const d = state.devices[id];
   if (!d || !$('#d-badge')) return;
   if (!state.renaming) $('#d-title').textContent = label(id);
-  $('#d-sub').textContent = `${d.name} · ${d.host}:${d.port}`;
+  $('#d-sub').textContent = [d.name, `${d.host}:${d.port}`, d.app_version].filter(Boolean).join(' · ');
   const s = statusOf(id);
   $('#d-badge').className = `badge ${s}`;
   $('#d-badge').textContent = STATUS_TEXT[s];
@@ -334,14 +399,13 @@ function renderHealth() {
 
   const d = state.devices[state.selected];
   const h = d && d.health;
-  const chart = h && b.url
-    ? `<a href="${esc(b.url)}/system/${encodeURIComponent(h.system_id)}" target="_blank" rel="noopener">Charts in Beszel ↗</a>` : '';
   const links = h
-    ? `<span class="hlinks">${chart}<a href="#" data-action="unlink" title="Stop showing this agent's data for this device">Unlink</a></span>` : '';
+    ? `<span class="hlinks"><a href="#" data-action="open-charts" title="CPU, memory, disk and temperature over time">History</a>`
+      + `<a href="#" data-action="unlink" title="Stop showing this agent's data for this device">Unlink</a></span>` : '';
 
   let body;
   if (!b.connected) {
-    body = `<div class="hnote">Beszel hub not reachable${b.error ? ` — ${esc(b.error)}` : ''}</div>`;
+    body = `<div class="hnote">Health monitoring not reachable${b.error ? ` — ${esc(b.error)}` : ''}</div>`;
   } else if (!h) {
     const free = b.unlinked || [];
     const off = d && d.beszel_system_id === 'none';
@@ -382,21 +446,14 @@ async function linkSystem(id, systemId, okMsg) {
   setTimeout(refresh, 1500);
 }
 
-function applyBeszel(beszel) {
-  state.beszel = beszel || null;
-  const nav = $('#nav-beszel');
-  nav.hidden = !(state.beszel && state.beszel.enabled && state.beszel.url);
-  if (state.beszel && state.beszel.url) nav.href = state.beszel.url;
-}
-
 async function openMonitoring() {
   $('#mon-ov').classList.add('on');
   $('#mon-body').hidden = true;
   $('#mon-state').textContent = 'Loading…';
   const res = await api('GET', '/api/beszel/agent-env', null, 15000);
   if (!res.ok) { $('#mon-state').textContent = `Cannot get the agent settings: ${res.error}`; return; }
-  $('#mon-state').innerHTML = 'Each Pi runs a small Beszel agent that reports CPU, memory, disk and temperature '
-    + `to the hub on this PC (<a href="${esc(res.data.hub_url)}" target="_blank" rel="noopener">${esc(res.data.hub_url)}</a>).`;
+  $('#mon-state').textContent = 'Each Pi runs a small monitoring agent that reports CPU, memory, disk and '
+    + `temperature to this PC (${res.data.hub_url}).`;
   $('#mon-env').textContent = res.data.env;
   $('#mon-warn').hidden = !res.data.warning;
   $('#mon-warn').textContent = res.data.warning || '';
@@ -419,6 +476,158 @@ async function copyEnv() {
     sel.addRange(range);
     toast('Press Ctrl+C to copy');
   }
+}
+
+// ===== Health history charts =====
+// Drawn from GET /api/pi/<id>/health/history, so nobody has to open (or log in to) Beszel.
+
+const CHARTS = [
+  { key: 'cpu', title: 'CPU', unit: '%', max: 100 },
+  { key: 'mem', title: 'Memory', unit: '%', max: 100 },
+  { key: 'disk', title: 'Disk', unit: '%', max: 100 },
+  { key: 'temp', title: 'Temperature', unit: '°C' },
+  { key: 'load', title: 'Load (1 min)', unit: '', digits: 2 },
+];
+const CHART_REFRESH_MS = 60000;          // the agent sends one sample a minute
+const PLOT_W = 1000, PLOT_H = 100;       // SVG units; the plot is stretched to its box
+
+const fmtMetric = (c, v) => (v == null ? '–' : `${Number(v).toFixed(c.digits || 0)}${c.unit}`);
+
+function fmtChartTime(t, data) {
+  const long = data.to - data.from > 86400;
+  return new Date(t * 1000).toLocaleString([], long
+    ? { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }
+    : { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
+}
+
+/** Round axis top just above v: 1, 2, 2.5, 5 × 10^n. */
+function niceMax(v) {
+  if (!(v > 0)) return 1;
+  const mag = 10 ** Math.floor(Math.log10(v));
+  return [1, 2, 2.5, 5, 10].map((s) => s * mag).find((top) => top >= v * 1.1) || 10 * mag;
+}
+
+function openCharts() {
+  if (state.charts) clearTimeout(state.charts.timer);
+  state.charts = { id: state.selected, data: null, timer: null };
+  $('#chart-title').textContent = `${label(state.selected)} · Health history`;
+  $('#charts').innerHTML = '';
+  $('#chart-ranges').innerHTML = '';
+  $('#chart-state').textContent = 'Loading…';
+  $('#chart-ov').classList.add('on');
+  loadCharts();
+}
+
+function closeCharts() {
+  if (state.charts) clearTimeout(state.charts.timer);
+  state.charts = null;
+  $('#chart-ov').classList.remove('on');
+}
+
+function setChartRange(range) {
+  if (!state.charts || range === state.chartRange) return;
+  state.chartRange = range;
+  $$('#chart-ranges button').forEach((b) => b.classList.toggle('on', b.dataset.range === range));
+  $('#chart-state').textContent = 'Loading…';
+  loadCharts();
+}
+
+async function loadCharts() {
+  const view = state.charts;
+  if (!view) return;
+  clearTimeout(view.timer);
+  const range = state.chartRange;
+  const res = await api('GET',
+    `/api/pi/${encodeURIComponent(view.id)}/health/history?range=${encodeURIComponent(range)}`, null, 15000);
+  if (state.charts !== view || state.chartRange !== range) return;    // closed or switched meanwhile
+  clearTimeout(view.timer);
+  view.timer = setTimeout(loadCharts, CHART_REFRESH_MS);
+  if (!res.ok) { $('#chart-state').textContent = `Cannot load the history: ${res.error}`; return; }
+  view.data = res.data;
+  renderCharts();
+}
+
+function renderCharts() {
+  const data = state.charts.data;
+  $('#chart-ranges').innerHTML = data.ranges.map((r) =>
+    `<button class="${r === state.chartRange ? 'on' : ''}" data-action="chart-range" data-range="${esc(r)}">${esc(r)}</button>`).join('');
+  $('#chart-state').textContent = data.points.length ? ''
+    : `No samples in this range yet: one is stored every ${data.interval / 60} min.`;
+  $('#charts').innerHTML = data.points.length ? CHARTS.map((c) => chartHtml(c, data)).join('') : '';
+}
+
+/** One metric as a line chart. The line breaks where samples are missing (Pi or agent down). */
+function chartHtml(c, data) {
+  const pts = data.points.filter((p) => p[c.key] != null);
+  if (!pts.length) {
+    return `<div class="chart"><div class="gh"><b>${esc(c.title)}</b><span>–</span></div>
+            <div class="plot none">Not reported by this Pi</div></div>`;
+  }
+
+  const top = c.max || niceMax(Math.max(...pts.map((p) => p[c.key])));
+  const x = (t) => ((t - data.from) / (data.to - data.from)) * PLOT_W;
+  const y = (v) => PLOT_H - (Math.min(v, top) / top) * PLOT_H;
+
+  const runs = [[]];
+  pts.forEach((p, i) => {
+    if (i && p.t - pts[i - 1].t > data.interval * 2.5) runs.push([]);
+    runs[runs.length - 1].push([x(p.t), y(p[c.key])]);
+  });
+  const xy = ([a, b]) => `${a.toFixed(1)},${b.toFixed(1)}`;
+  let line = '';
+  let area = '';
+  for (const run of runs) {
+    if (run.length === 1) run.push([run[0][0] + 2, run[0][1]]);    // a lone sample still shows
+    line += `M${run.map(xy).join('L')}`;
+    area += `M${run[0][0].toFixed(1)},${PLOT_H}L${run.map(xy).join('L')}L${run[run.length - 1][0].toFixed(1)},${PLOT_H}Z`;
+  }
+  const grid = [0.25, 0.5, 0.75].map((f) => `<line x1="0" x2="${PLOT_W}" y1="${PLOT_H * f}" y2="${PLOT_H * f}"/>`).join('');
+  const latest = fmtMetric(c, pts[pts.length - 1][c.key]);
+
+  return `
+    <div class="chart" data-key="${c.key}" data-top="${top}">
+      <div class="gh"><b>${esc(c.title)}</b><span class="cv" data-latest="${esc(latest)}">${esc(latest)}</span></div>
+      <div class="plot">
+        <svg viewBox="0 0 ${PLOT_W} ${PLOT_H}" preserveAspectRatio="none" aria-hidden="true">
+          <g class="grid">${grid}</g>
+          <line class="base" x1="0" x2="${PLOT_W}" y1="${PLOT_H}" y2="${PLOT_H}"/>
+          <path class="area" d="${area}"/><path class="line" d="${line}"/>
+        </svg>
+        <span class="ymax">${esc(fmtMetric(c, top))}</span>
+        <div class="cursor" hidden><i></i></div>
+      </div>
+      <div class="ax"><span>${fmtChartTime(data.from, data)}</span>
+        <span>${fmtChartTime((data.from + data.to) / 2, data)}</span><span>Now</span></div>
+    </div>`;
+}
+
+/** Hovering one chart shows the same moment on all of them. */
+function showChartCursor(plot, clientX) {
+  const data = state.charts && state.charts.data;
+  if (!data || !data.points.length) return;
+  const box = plot.getBoundingClientRect();
+  const t = data.from + ((clientX - box.left) / box.width) * (data.to - data.from);
+  const p = data.points.reduce((a, b) => (Math.abs(b.t - t) < Math.abs(a.t - t) ? b : a));
+  const left = ((p.t - data.from) / (data.to - data.from)) * 100;
+  $$('#charts .chart[data-key]').forEach((card) => {
+    const c = CHARTS.find((m) => m.key === card.dataset.key);
+    const v = p[c.key];
+    const top = Number(card.dataset.top);
+    const cursor = $('.cursor', card);
+    const dot = $('i', cursor);
+    cursor.hidden = false;
+    cursor.style.left = `${left}%`;
+    dot.hidden = v == null;
+    if (v != null) dot.style.top = `${100 - (Math.min(v, top) / top) * 100}%`;
+    $('.cv', card).textContent = `${fmtMetric(c, v)} · ${fmtChartTime(p.t, data)}`;
+  });
+}
+
+function hideChartCursor() {
+  $$('#charts .chart[data-key]').forEach((card) => {
+    $('.cursor', card).hidden = true;
+    $('.cv', card).textContent = $('.cv', card).dataset.latest;
+  });
 }
 
 // ===== History =====
@@ -465,7 +674,7 @@ async function refresh() {
   setServerUp(true);
 
   state.devices = res.data.pis || {};
-  applyBeszel(res.data.beszel);
+  state.beszel = res.data.beszel || null;
 
   if (!state.devices[state.selected]) {
     state.selected = Object.keys(state.devices)[0] || null;
@@ -477,6 +686,7 @@ async function refresh() {
   updateHeader();
   renderHealth();
   renderBusy();
+  if (!state.catalogs[state.selected] && statusOf(state.selected) !== 'offline') loadCatalog(state.selected);
 }
 
 /** Run one command on one device. Resolves true only if it really did what was asked. */
@@ -491,7 +701,7 @@ async function runCommand(id, cmd, timeout) {
   if (id === state.selected) renderBusy();
 
   // Server waits up to timeout + 5 s for the Pi; give it a little more before giving up here.
-  const res = await api('POST', `/api/pi/${encodeURIComponent(id)}/command`, { command: cmd, timeout }, (timeout + 10) * 1000);
+  const res = await api('POST', `/api/pi/${encodeURIComponent(id)}/command`, { command: cmd, timeout }, (timeout + 15) * 1000);
 
   delete state.running[id];
   // The last poll may still say "running" for this device; clear it so the buttons
@@ -524,12 +734,14 @@ async function homeAll() {
   btn.disabled = true;
   btn.textContent = 'Homing…';
 
-  // Devices run in parallel; inside one device the axes go one after another and the
-  // sequence stops at the first failure (no point homing Z if X just failed).
+  // Devices run in parallel; inside one device the axes go one after another (the
+  // sequence comes from that Pi's catalog) and stop at the first failure.
   const results = await Promise.all(ids.map(async (id) => {
     if (busyCmd(id)) return 'skipped';
-    for (const cmd of HOME_SEQUENCE) {
-      if (!(await runCommand(id, cmd, 40))) return 'failed';
+    const catalog = await loadCatalog(id);
+    if (!catalog) return 'failed';
+    for (const cmd of catalog.home_sequence) {
+      if (!(await runCommand(id, cmd, timeoutFor(catalog, cmd)))) return 'failed';
     }
     return 'ok';
   }));
@@ -579,17 +791,18 @@ async function removeDevice(id) {
   const text = `${id} (${d.host}) will be removed from this list. The Pi itself is not changed.`
     + (linked ? ' If its monitoring agent keeps running, it registers again and shows up under "Unlinked agents".' : '');
   const answer = await confirmDialog(`Remove ${label(id)}?`, text, 'Remove',
-    linked ? 'Also remove it from Beszel (deletes its history)' : null);
+    linked ? 'Also delete its health history' : null);
   if (!(linked ? answer.ok : answer)) return;
   const alsoBeszel = linked && answer.checked;
   const res = await api('DELETE', `/api/pi/${encodeURIComponent(id)}${alsoBeszel ? '?beszel=1' : ''}`);
   if (!res.ok) { toast(`Remove failed: ${res.error}`, 'error'); return; }
   delete state.devices[id];
   delete state.history[id];
+  delete state.catalogs[id];
   if (state.selected === id) state.selected = Object.keys(state.devices)[0] || null;
   renderList();
   renderDetail();
-  toast(res.data.beszel_deleted ? 'Device removed here and from Beszel' : 'Device removed');
+  toast(res.data.beszel_deleted ? 'Device and its health history removed' : 'Device removed');
 }
 
 function startRename() {
@@ -701,7 +914,8 @@ document.addEventListener('click', (e) => {
   if (overlay) {                                   // click on the dimmed backdrop
     if (overlay.id === 'add-ov') closeAdd();
     if (overlay.id === 'mon-ov') closeMonitoring();
-    if (overlay.id === 'confirm-ov' && overlay.cancel) overlay.cancel();
+    if (overlay.id === 'chart-ov') closeCharts();
+    if ((overlay.id === 'confirm-ov' || overlay.id === 'token-ov') && overlay.cancel) overlay.cancel();
     return;
   }
 
@@ -731,7 +945,9 @@ document.addEventListener('click', (e) => {
       const input = $('#custom');
       const cmd = input.value.trim();
       if (!cmd) { toast('Enter a command first', 'error'); input.focus(); return; }
-      runOnSelected(cmd, CUSTOM_TIMEOUT);
+      const catalog = state.catalogs[state.selected];
+      if (!catalog) { toast('Controls not loaded yet', 'error'); return; }
+      runOnSelected(cmd, catalog.default_timeout);
       break;
     }
     case 'rename': startRename(); break;
@@ -755,6 +971,12 @@ document.addEventListener('click', (e) => {
       linkSystem(state.selected, null, 'Unlinked. Use Link to connect it again.');
       break;
     case 'auto-link': linkSystem(state.selected, '', 'Auto-link on'); break;
+    case 'open-charts':
+      e.preventDefault();
+      openCharts();
+      break;
+    case 'close-charts': closeCharts(); break;
+    case 'chart-range': setChartRange(el.dataset.range); break;
   }
 });
 
@@ -767,11 +989,21 @@ document.addEventListener('keydown', (e) => {
   }
   if (e.key === 'Escape') {
     const confirmOv = $('#confirm-ov');
-    if (confirmOv.classList.contains('on') && confirmOv.cancel) confirmOv.cancel();
+    const tokenOv = $('#token-ov');
+    if (tokenOv.classList.contains('on') && tokenOv.cancel) tokenOv.cancel();
+    else if (confirmOv.classList.contains('on') && confirmOv.cancel) confirmOv.cancel();
     else if ($('#add-ov').classList.contains('on')) closeAdd();
     else if ($('#mon-ov').classList.contains('on')) closeMonitoring();
+    else if ($('#chart-ov').classList.contains('on')) closeCharts();
   }
 });
+
+$('#charts').addEventListener('mousemove', (e) => {
+  const plot = e.target.closest('.plot:not(.none)');
+  if (plot) showChartCursor(plot, e.clientX);
+  else hideChartCursor();
+});
+$('#charts').addEventListener('mouseleave', hideChartCursor);
 
 $('#add-form').addEventListener('submit', submitAdd);
 

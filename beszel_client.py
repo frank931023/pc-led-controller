@@ -16,6 +16,8 @@ pi_config.json is the master device list. Each device can be linked to one Besze
               optionally deleted in Beszel too (app.py)
   * unlinked  systems that belong to no device are listed so the UI can offer
               "Add as device" / "Link"
+  * history   CPU / memory / disk / temperature / load over time for the charts
+              in the web UI, so nobody has to open (and log in to) Beszel itself
 
 PocketBase REST API used:
   POST   /api/collections/users/auth-with-password
@@ -24,15 +26,22 @@ PocketBase REST API used:
   DELETE /api/collections/systems/records/<id>
   GET    /api/beszel/info                           (hub public key = agent KEY)
   POST   /api/beszel/universal-token                (token agents register with)
+  GET    /api/collections/system_stats/records      (history for the charts)
 
 A systems record looks like:
   { id, name, host, status: up|down|paused|pending,
     info: { cpu, mp (mem %), dp (disk %), dt (temp °C), u (uptime s), la [1,5,15], v } }
+
+A system_stats record is one averaged sample:
+  { system, type: 1m|10m|20m|120m|480m, created: "2026-01-02 03:04:05.678Z",
+    stats: { cpu, mp, dp, t: {sensor: °C}, la [1,5,15], ... } }
 """
 
 import logging
+import re
 import threading
 import time
+from datetime import datetime, timedelta, timezone
 
 import requests
 
@@ -42,6 +51,18 @@ log = logging.getLogger(__name__)
 
 REQUEST_TIMEOUT = 5
 UNLINKED = 'none'      # beszel_system_id value: user unlinked on purpose, never auto-match
+
+# Chart range -> (system_stats record type, length). Beszel keeps each record type for
+# about as long as the range it is used for here, the same pairs its own dashboard uses.
+HISTORY_RANGES = {
+    '1h': ('1m', timedelta(hours=1)),
+    '12h': ('10m', timedelta(hours=12)),
+    '24h': ('20m', timedelta(hours=24)),
+    '1w': ('120m', timedelta(weeks=1)),
+    '30d': ('480m', timedelta(days=30)),
+}
+SYSTEM_ID_RE = re.compile(r'^[a-z0-9]{1,32}$')   # PocketBase ids; also keeps the filter safe
+PB_TIME = '%Y-%m-%d %H:%M:%S.%fZ'
 
 
 class BeszelError(Exception):
@@ -115,6 +136,29 @@ class BeszelClient:
 
     def delete_system(self, system_id):
         self._request('DELETE', f'/api/collections/systems/records/{system_id}')
+
+    def history(self, system_id, range_key):
+        """
+        Samples for one chart range, oldest first:
+          {"from", "to", "interval": seconds between samples,
+           "points": [{t, cpu, mem, disk, temp, load}]}
+        Times are Unix timestamps; a metric the agent does not report is None.
+        from/to span the whole range, so a stretch with no samples shows as a gap.
+        """
+        record_type, length = HISTORY_RANGES[range_key]
+        if not SYSTEM_ID_RE.match(system_id or ''):
+            raise BeszelError('Invalid Beszel system id')
+        now = datetime.now(timezone.utc)
+        since = now - length
+        body = self._request('GET', '/api/collections/system_stats/records', params={
+            'filter': f"system='{system_id}' && type='{record_type}' && created>='{since.strftime(PB_TIME)}'",
+            'sort': 'created',
+            'fields': 'created,stats',
+            'perPage': 500,      # the longest range has ~90 samples
+        })
+        return {'from': int(since.timestamp()), 'to': int(now.timestamp()),
+                'interval': int(record_type[:-1]) * 60,
+                'points': [_point(r) for r in body.get('items', [])]}
 
     # ----- agent setup -----
 
@@ -302,6 +346,21 @@ def _find_match(device_id, device, systems, claimed):
         if device.get('host') and s.get('host') == device['host']:
             return s
     return None
+
+
+def _point(record):
+    stats = record.get('stats') or {}
+    temps = [v for v in (stats.get('t') or {}).values() if isinstance(v, (int, float))]
+    la = stats.get('la') or []
+    created = datetime.strptime(record['created'], PB_TIME).replace(tzinfo=timezone.utc)
+    return {
+        't': int(created.timestamp()),
+        'cpu': stats.get('cpu'),
+        'mem': stats.get('mp'),
+        'disk': stats.get('dp'),
+        'temp': max(temps) if temps else None,     # hottest sensor, like the summary tile
+        'load': la[0] if la else None,
+    }
 
 
 def _summarise(system):
