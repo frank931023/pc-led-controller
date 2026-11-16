@@ -6,7 +6,7 @@
 `site.yml` 會對 `inventory.yml` 裡的每台 Pi 做完整部署，並把它註冊到 Motion Control Center：
 
 1. 確認控制中心連得到；開了健康監控時，向它取得 Beszel agent 設定
-2. 沒有 Docker 就安裝（官方腳本）、安裝 git
+2. 安裝 git、iptables（Raspberry Pi OS trixie 沒有它 Docker 容器會沒網路），沒有 Docker 就安裝（官方腳本）
 3. 取得 Pi 程式碼（`pi_repo_url` 的 `pi_repo_version`）
 4. 找出 Arduino：`/dev/serial/by-id` 底下只有一個裝置就用它，否則用 `serial_port` 或 `/dev/ttyUSB0`
 5. 產生 Pi 的 `.env`（`PI_ID` = inventory 的主機名稱，`BOARD` = inventory 的 `board`）
@@ -37,7 +37,7 @@
 ```bash
 cd deploy/ansible
 cp inventory.example.yml inventory.yml     # 填入每台 Pi 的 IP
-nano group_vars/all.yml                    # 至少確認 pc_url（用 PC 的區網 IP，不要 localhost）
+nano group_vars/all.yml                    # 至少確認 pc_urls（PC 的區網 IP，不要 localhost）
 
 ansible all -m ping                        # 先確認每台都連得到
 ansible-playbook site.yml                  # 部署全部
@@ -57,7 +57,7 @@ ansible-playbook site.yml -e pc_api_token=xxxx     # 控制中心有設 API_TOKE
 
 | 變數 | 位置 | 說明 |
 |---|---|---|
-| `pc_url` | `group_vars/all.yml` | 控制中心網址（PC 的區網 IP）。給 Pi 的 Beszel hub 網址也是從它推出來的 |
+| `pc_urls` | `group_vars/all.yml` | PC 可能用的控制中心網址（區網 IP，可列多個）；部署時用第一個連得到的，給 Pi 的 Beszel hub 網址也從它推出來。PC 換 IP 後要重跑。`-e pc_url=…` 直接指定一個 |
 | `pc_api_token` | `-e` 或 ansible-vault | 控制中心 `.env` 的 `API_TOKEN`，沒設就留空 |
 | `pi_repo_url` / `pi_repo_version` | `group_vars/all.yml` | Pi 程式碼來源與版本 |
 | `pi_image` | `group_vars/all.yml` | CI 建好的 image（例如 `ghcr.io/frank931023/pi-arduino-connection-test-0717:main`）；空 = 在 Pi 上 build |

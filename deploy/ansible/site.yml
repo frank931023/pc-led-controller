@@ -14,6 +14,37 @@
   serial: "{{ pi_batch_size | default('100%') }}"
 
   pre_tasks:
+    # The PC may be on any of the addresses in pc_urls; use the first that answers.
+    - name: Look for the control center at each address in pc_urls
+      when: pc_url is not defined
+      delegate_to: localhost
+      become: false
+      run_once: true
+      ansible.builtin.uri:
+        url: "{{ item }}/api/health"
+        timeout: 3
+      loop: "{{ pc_urls }}"
+      register: pc_probe
+      failed_when: false
+      check_mode: false   # read-only, so it also runs in --check dry runs
+
+    - name: Use the first address that answered
+      when: pc_url is not defined
+      run_once: true
+      ansible.builtin.set_fact:
+        pc_url: >-
+          {{ pc_probe.results | selectattr('status', 'defined') | selectattr('status', 'equalto', 200)
+             | map(attribute='item') | first | default('') }}
+
+    - name: Stop when no address answered
+      run_once: true
+      ansible.builtin.assert:
+        that: pc_url | length > 0
+        fail_msg: >-
+          No control center answered at {{ pc_urls | join(' or ') }}.
+          Is Docker Desktop running, and does the PC have one of these IPs (ipconfig)?
+        success_msg: "Using the control center at {{ pc_url }}"
+
     - name: Check that the control center is reachable
       delegate_to: localhost
       become: false
@@ -21,6 +52,7 @@
       ansible.builtin.uri:
         url: "{{ pc_url }}/api/health"
       register: pc_health
+      check_mode: false
 
     - name: Fail early when the control center needs a token we do not have
       run_once: true
@@ -37,12 +69,13 @@
         url: "{{ pc_url }}/api/beszel/agent-env"
         headers: "{{ pc_auth_headers }}"
       register: agent_env
+      check_mode: false
 
     - name: Refuse a hub URL the Pis cannot reach
       when: monitoring | bool and (agent_env.json.warning | default('', true) | length > 0)
       run_once: true
       ansible.builtin.fail:
-        msg: "{{ agent_env.json.warning }} (set pc_url to the PC's LAN IP)"
+        msg: "{{ agent_env.json.warning }} (list the PC's LAN IPs in pc_urls)"
 
   tasks:
     # No default on purpose: a Uno deployed as a Mega would offer axes it does not have.
@@ -52,17 +85,19 @@
         fail_msg: "Set board: mega or board: uno for {{ inventory_hostname }} in inventory.yml"
         quiet: true
 
+    # Before Docker: Raspberry Pi OS trixie ships without iptables, and without it Docker
+    # cannot give containers a network.
+    - name: Install git and iptables
+      ansible.builtin.apt:
+        name: [git, iptables]
+        state: present
+        update_cache: true
+        cache_valid_time: 86400
+
     - name: Install Docker (only when missing)
       ansible.builtin.shell: curl -fsSL https://get.docker.com | sh
       args:
         creates: /usr/bin/docker
-
-    - name: Install git
-      ansible.builtin.apt:
-        name: git
-        state: present
-        update_cache: true
-        cache_valid_time: 86400
 
     - name: Check out the Pi project
       ansible.builtin.git:
@@ -161,6 +196,7 @@
       ansible.builtin.uri:
         url: "{{ pc_url }}/api/pi/{{ pi_id }}"
       register: seen
+      check_mode: false
 
     - name: Report
       ansible.builtin.debug:

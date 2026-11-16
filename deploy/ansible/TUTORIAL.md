@@ -344,11 +344,17 @@ nano 存檔：`Ctrl+O` → Enter；離開：`Ctrl+X`。
 nano group_vars/all.yml
 ```
 
-至少確認這一行是**步驟 2.1 查到的 PC IP**：
+至少確認 `pc_urls` 裡有**步驟 2.1 查到的 PC IP**。PC 可能用不只一個 IP 時全部列出來：
 
 ```yaml
-pc_url: http://172.18.177.10:5001
+pc_urls:
+  - http://192.168.1.17:5001
+  - http://192.168.1.206:5001
 ```
+
+部署時會依序試，用**第一個連得到的**，Pi 的監控 agent 也會連回那個位址。
+所以 PC 換到另一個 IP 之後，要再跑一次 playbook，監控才會跟著換過去。
+臨時指定一個位址：`ansible-playbook site.yml -e pc_url=http://192.168.1.206:5001`。
 
 ⚠ 不能寫 `localhost` 或 `127.0.0.1`：Pi 的監控 agent 要靠這個位址連回 PC。
 
@@ -500,15 +506,15 @@ Pi 專案已經有 GitHub Actions（`.github/workflows/image.yml`），push 後�
 | `UNREACHABLE! ... Permission denied (publickey,password)` | SSH key 沒裝到那台 Pi，重做 5.2 |
 | `UNREACHABLE! ... Connection timed out` / `No route to host` | IP 錯了、Pi 沒開機或不在同一個網路。先 `ping <IP>` |
 | `Missing sudo password` | 那台 Pi 的帳號 sudo 需要密碼。指令加 `-K`，會問一次 sudo 密碼 |
-| `Check that the control center is reachable` 失敗 | WSL 連不到 `pc_url`。確認 `pc_url` 的 IP、控制中心有在跑、Windows 防火牆允許 5001 |
+| `Stop when no address answered` 失敗 | `pc_urls` 裡每個位址都連不到。確認 PC 目前的 IP（`ipconfig`）在清單裡、控制中心有在跑、Windows 防火牆允許 5001 |
 | `Fail early when the control center needs a token` | 控制中心有設 `API_TOKEN`，加 `-e pc_api_token=...` |
-| `Refuse a hub URL the Pis cannot reach` | `pc_url` 寫了 localhost / 127.0.0.1，改成 PC 的區網 IP |
+| `Refuse a hub URL the Pis cannot reach` | `pc_urls` 寫了 localhost / 127.0.0.1，改成 PC 的區網 IP |
 | 卡在 `Install Docker` 很久 | 正常，第一次要下載安裝。超過 15 分鐘才需要懷疑網路 |
 | `Start the containers` 失敗，訊息有 `network` / `iptables` | trixie 沒裝 iptables，做 3.3 的 `sudo apt install -y iptables` 後重開 Pi 再跑 |
 | 部署成功但狀態是 `no_arduino` | Arduino 沒接、或埠不對。`ssh pi@<IP> ls -l /dev/serial/by-id/` 看看，必要時在 inventory 設 `serial_port`，再跑一次 |
 | 狀態 `online` 但控制中心沒有 Controls 按鈕 | 那台 Pi 跑的是舊版程式：確認 Pi 專案已 push，再跑一次 `site.yml` |
 | Pi 頁面標題是 `pi-001` | 那台不是用 Ansible 部署的（`.env` 沒有 `PI_ID`）。加進 inventory 再跑一次 |
-| Health 一直沒資料 | `curl <pc_url>/api/beszel/agent-env` 檢查；PC 的 Windows 防火牆要允許 8090 |
+| Health 一直沒資料 | PC 的 Windows 防火牆要允許 8090；PC 換了 IP 就再跑一次 playbook |
 | 每次跑都 `changed` | 回報給維護者；正常重跑應該是 `changed=0` |
 
 需要看更多細節：任何指令後面加 `-v`（或 `-vvv` 看 SSH 細節）。
@@ -523,7 +529,7 @@ Pi 專案已經有 GitHub Actions（`.github/workflows/image.yml`），push 後�
 - [ ] WSL 裡 `ansible --version` 正常
 - [ ] WSL 裡 `ssh pi@<每台 IP> hostname` 不用密碼
 - [ ] `~/.bashrc` 有 `ANSIBLE_CONFIG` 和 `pideploy`
-- [ ] `inventory.yml` 列了所有 Pi，`group_vars/all.yml` 的 `pc_url` 是 PC 區網 IP
+- [ ] `inventory.yml` 列了所有 Pi，`group_vars/all.yml` 的 `pc_urls` 有 PC 的區網 IP
 - [ ] `ansible all -m ping` 全部 SUCCESS
 - [ ] `ansible-playbook site.yml` 全部 `failed=0`
 - [ ] 控制中心看得到所有 Pi，再跑一次是 `changed=0`

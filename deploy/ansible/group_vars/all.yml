@@ -1,9 +1,14 @@
 # Settings shared by every Pi. Override per Pi in inventory.yml, or on the command line:
-#   ansible-playbook site.yml -e pc_url=http://172.18.177.10:5001
+#   ansible-playbook site.yml -e pc_url=http://192.168.1.206:5001
 
-# Motion Control Center on the PC, as reachable from the machine running Ansible.
-# ⚠ Use the PC's LAN IP, not localhost: the Beszel hub URL handed to the Pis is derived from it.
-pc_url: http://172.18.177.10:5001
+# Every address the Motion Control Center on the PC may have (the PC can be on either IP).
+# The playbook uses the first one that answers, and the Pis' monitoring agents connect back to
+# that same address, so re-run the playbook after the PC moves to the other IP.
+# ⚠ LAN IPs only, not localhost: the Beszel hub URL handed to the Pis is derived from it.
+# -e pc_url=... skips the search and uses that address.
+pc_urls:
+  - http://192.168.1.17:5001
+  - http://192.168.1.206:5001
 # Same value as API_TOKEN in the control center's .env (empty if it has none).
 # Better kept out of git: ansible-playbook site.yml -e pc_api_token=...  or ansible-vault.
 pc_api_token: ""
