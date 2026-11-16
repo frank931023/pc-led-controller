@@ -299,28 +299,38 @@ all:
       hosts:
         pi-01:
           ansible_host: 172.18.177.105
+          board: mega
         pi-02:
           ansible_host: 172.18.177.104
+          board: mega
         pi-03:
           ansible_host: 172.18.177.106
+          board: uno
         pi-04:
           ansible_host: 172.18.177.107
+          board: uno
         pi-05:
           ansible_host: 172.18.177.108
+          board: uno
         pi-06:
           ansible_host: 172.18.177.109
+          board: uno
         pi-07:
           ansible_host: 172.18.177.110
+          board: uno
 ```
 
 注意事項：
 
 - **縮排要用空白，不能用 Tab**，而且要對齊（YAML 很在意縮排）
+- **`board` 每台都要填**：`mega` 或 `uno`，照那台 Pi 實際接的 Arduino 填（上面哪幾台是 Mega 只是範例）。
+  它決定控制中心顯示哪些軸的按鈕；沒填或填錯，playbook 會在那台停下來並告訴你
 - 每台 Pi 只接一台 Arduino 時**不用填** `serial_port`，會自動偵測
 - 某台 Pi 接了不只一個 USB 序列裝置，才需要指定，用 `/dev/serial/by-id/` 的完整路徑（步驟 3.3 看到的那個）：
   ```yaml
         pi-07:
           ansible_host: 172.18.177.110
+          board: uno
           serial_port: /dev/serial/by-id/usb-Arduino__www.arduino.cc__0042_xxxx-if00
   ```
 
@@ -402,7 +412,7 @@ ansible-playbook site.yml --limit pi-01
 ```
 TASK [Report] ****
 ok: [pi-01] =>
-  msg: 'pi-01: online · version main@abc1234 · serial /dev/serial/by-id/usb-Arduino...'
+  msg: 'pi-01: online · board mega · version main@abc1234 · serial /dev/serial/by-id/usb-Arduino...'
 
 PLAY RECAP ****
 pi-01 : ok=16  changed=6  unreachable=0  failed=0  skipped=3 ...

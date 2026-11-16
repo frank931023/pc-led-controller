@@ -9,7 +9,7 @@
 2. 沒有 Docker 就安裝（官方腳本）、安裝 git
 3. 取得 Pi 程式碼（`pi_repo_url` 的 `pi_repo_version`）
 4. 找出 Arduino：`/dev/serial/by-id` 底下只有一個裝置就用它，否則用 `serial_port` 或 `/dev/ttyUSB0`
-5. 產生 Pi 的 `.env`（`PI_ID` = inventory 的主機名稱）
+5. 產生 Pi 的 `.env`（`PI_ID` = inventory 的主機名稱，`BOARD` = inventory 的 `board`）
 6. 有設 `pi_image` 就 `docker compose pull`，否則在 Pi 上 build；然後 `docker compose up -d`
 7. 等 Pi 的 `/api/health` 回應
 8. `PUT /api/pi/<id>` 註冊到控制中心（已存在就只更新 host / port / name，網頁上改的別名和 Beszel 綁定會保留）
@@ -63,6 +63,7 @@ ansible-playbook site.yml -e pc_api_token=xxxx     # 控制中心有設 API_TOKE
 | `pi_image` | `group_vars/all.yml` | CI 建好的 image（例如 `ghcr.io/frank931023/pi-arduino-connection-test-0717:main`）；空 = 在 Pi 上 build |
 | `pi_dir` | `group_vars/all.yml` | Pi 上的安裝位置，預設 `/opt/pi-arduino-controller` |
 | `monitoring` | `group_vars/all.yml` | `true` = 啟動 Beszel agent；`false` = 移除 |
+| `board` | inventory（每台，**必填**） | 那台 Pi 接的 Arduino：`mega` 或 `uno`，決定控制中心顯示哪些軸。沒填或填錯，playbook 會停在那台 |
 | `serial_port` | inventory（每台） | Arduino 的序列埠；不填就自動偵測 |
 | `pi_port` / `pi_name` / `register_host` | inventory（每台） | API 埠、控制中心顯示名稱、控制中心連這台 Pi 用的位址 |
 | `command_timeout` / `max_command_timeout` / `baud_rate` | `group_vars/all.yml` | 寫進每台 Pi 的 `.env` |

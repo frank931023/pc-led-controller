@@ -62,7 +62,7 @@ def command_catalog(pi_id):
         catalog = pi_client.commands(device)
     except pi_client.PiError as e:
         return fail(str(e), e.http_status)
-    return ok(pi_id=pi_id, **{k: catalog.get(k) for k in ('groups', 'home_sequence', 'default_timeout')})
+    return ok(pi_id=pi_id, **{k: catalog.get(k) for k in ('board', 'groups', 'home_sequence', 'default_timeout')})
 
 
 @bp.post('/api/pi/<pi_id>/command')

@@ -20,7 +20,7 @@ function renderList() {
         ${indicator}
         <div class="t">
           <b>${esc(label(id))}</b>
-          <small>${esc(d.host)}:${esc(d.port)}</small>
+          <small>${esc([`${d.host}:${d.port}`, boardText(d.board)].filter(Boolean).join(' · '))}</small>
           ${healthLine(d.health)}
         </div>
         ${alertsFor(id).length ? `<span class="badge offline" title="${esc(alertsFor(id).map((a) => a.text).join('\n'))}">⚠ ${alertsFor(id).length}</span>` : ''}
@@ -148,7 +148,8 @@ function updateHeader() {
   const d = state.devices[id];
   if (!d || !$('#d-badge')) return;
   if (!state.renaming) $('#d-title').textContent = label(id);
-  $('#d-sub').textContent = [d.name, `${d.host}:${d.port}`, d.app_version].filter(Boolean).join(' · ');
+  $('#d-sub').textContent = [d.name, `${d.host}:${d.port}`, boardText(d.board) && `Arduino ${boardText(d.board)}`, d.app_version]
+    .filter(Boolean).join(' · ');
   const s = statusOf(id);
   $('#d-badge').className = `badge ${s}`;
   $('#d-badge').textContent = STATUS_TEXT[s];

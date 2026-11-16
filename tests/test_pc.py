@@ -165,9 +165,9 @@ def test_remote_command_shows_as_running(client):
 def test_command_catalog_is_proxied(client, monkeypatch):
     client.put('/api/pi/pi-01', json=DEVICE)
     monkeypatch.setattr(pi_client, 'commands', lambda device: {
-        'status': 'success', 'groups': [], 'home_sequence': ['SXH'], 'default_timeout': 130})
+        'status': 'success', 'board': 'uno', 'groups': [], 'home_sequence': ['SXH'], 'default_timeout': 130})
     body = client.get('/api/pi/pi-01/commands').get_json()
-    assert body['home_sequence'] == ['SXH'] and body['default_timeout'] == 130
+    assert body['home_sequence'] == ['SXH'] and body['default_timeout'] == 130 and body['board'] == 'uno'
 
 
 # ----- health history -----

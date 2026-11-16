@@ -78,6 +78,7 @@ class StatusMonitor:
                 'checked_ago': round(time.monotonic() - updated, 1) if updated else None,
                 'app_version': info.get('app_version'),
                 'rig_name': info.get('rig_name'),
+                'board': info.get('board'),
                 'command_timeout': info.get('command_timeout'),
                 'max_command_timeout': info.get('max_command_timeout'),
             }

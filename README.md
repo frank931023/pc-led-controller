@@ -426,7 +426,7 @@ python app.py
 { "status": "success", "pis": { "pi-01": {
     "host": "172.18.177.105", "port": 5000, "name": "pi-01", "alternative_name": "floor c",
     "status": "online", "running": null, "checked_ago": 2.1,
-    "app_version": "main@1a2b3c4", "rig_name": "Ceiling Rig Front",
+    "app_version": "main@1a2b3c4", "rig_name": "Ceiling Rig Front", "board": "mega",
     "command_timeout": 130, "max_command_timeout": 300,
     "health": { "status": "up", "cpu": 12.3, "mem": 41.0, "disk": 23.5, "temp": 48.2,
                 "uptime": 86400, "load": 0.42, "agent_version": "0.21.1", "system_id": "..." } } } }
@@ -436,7 +436,8 @@ python app.py
 - `running`：這台正在跑的指令（例如 `"SXC"`），包含不是從這裡送的（Pi 本機網頁、腳本）；沒有則為 `null`
 - `checked_ago`：距離上次檢測幾秒。只要有任何 API 呼叫（網頁、腳本、Ansible），背景每 5 秒檢測一次；
   30 秒沒有任何 API 呼叫就暫停，所以這個數字變大代表狀態可能過時了
-- `app_version`、`rig_name`、`command_timeout`、`max_command_timeout`：那台 Pi 上次回報的資訊
+- `app_version`、`rig_name`、`board`、`command_timeout`、`max_command_timeout`：那台 Pi 上次回報的資訊。
+  `board` 是那台 Pi `.env` 的 `BOARD`（`mega` / `uno`），網頁顯示在裝置清單與標題下；不同板子的按鈕不同
 - `health`：綁定的 Beszel 系統的健康資料；沒有綁定或沒開健康監控時為 `null`。`temp` 沒有感測器時為 `null`
 - 回應最外層另有 `beszel`（同 `GET /api/beszel`），網頁每 5 秒用它更新 Unlinked agents
 

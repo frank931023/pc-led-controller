@@ -31,6 +31,9 @@ const POLL_MS = 5000;
 const HISTORY_MAX = 30;
 const ID_RE = /^[A-Za-z0-9_.-]{1,32}$/;                 // same rule as the server
 const STATUS_TEXT = { online: 'Online', busy: 'Busy', 'no-arduino': 'No Arduino', offline: 'Offline', checking: 'Checking' };
+// Arduino board each Pi reports (BOARD in the Pi's .env); it decides which axes the Pi offers.
+const BOARD_TEXT = { mega: 'Mega', uno: 'Uno' };
+const boardText = (board) => (board ? BOARD_TEXT[board] || board : '');
 const TOKEN_KEY = 'mcc-api-token';
 
 // ===== State =====

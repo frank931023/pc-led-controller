@@ -45,6 +45,13 @@
         msg: "{{ agent_env.json.warning }} (set pc_url to the PC's LAN IP)"
 
   tasks:
+    # No default on purpose: a Uno deployed as a Mega would offer axes it does not have.
+    - name: Check that the Pi's Arduino board is set
+      ansible.builtin.assert:
+        that: board is defined and board in ['mega', 'uno']
+        fail_msg: "Set board: mega or board: uno for {{ inventory_hostname }} in inventory.yml"
+        quiet: true
+
     - name: Install Docker (only when missing)
       ansible.builtin.shell: curl -fsSL https://get.docker.com | sh
       args:
@@ -159,5 +166,6 @@
       ansible.builtin.debug:
         msg: >-
           {{ pi_id }}: {{ seen.json.pi.status }}
+          · board {{ board }}
           · version {{ seen.json.pi.app_version }}
           · serial {{ pi_serial_port }}
