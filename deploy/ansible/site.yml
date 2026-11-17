@@ -1,20 +1,31 @@
-# Deploy the Arduino controller to every Pi in inventory.yml and register it in the
-# Motion Control Center. Safe to run again at any time (idempotent):
+# 把 Pi 控制程式部署到 inventory.yml 裡的每一台 Pi，並註冊到 PC 的 Motion Control Center。
+# 隨時可以重跑：已經是對的狀態就不會再改（idempotent）。
 #
-#   ansible-playbook site.yml                      # all Pis
-#   ansible-playbook site.yml --limit pi-03        # one Pi
-#   ansible-playbook site.yml -e pi_batch_size=1   # rolling, one Pi at a time
+#   ansible-playbook site.yml                      # 全部的 Pi
+#   ansible-playbook site.yml --limit pi-01        # 只部署一台
+#   ansible-playbook site.yml -e pi_batch_size=1   # 一次一台輪流部署（其他台不會同時停機）
+#   ansible-playbook site.yml --check              # 試跑：只檢查、不改任何東西
 #
-# Per Pi: Docker -> code -> .env -> docker compose up -> wait until healthy -> PUT into the
-# control center -> print the status the control center sees.
+# 流程：
+#   pre_tasks（只在 PC 上跑一次）：找到控制中心 → 檢查 API token → 取得監控 agent 設定
+#   tasks（每台 Pi 各跑一次）：檢查板子 → 裝套件與 Docker → 下載程式 → 找 Arduino
+#                             → 寫 .env → 啟動容器 → 等它回應 → 註冊到控制中心 → 印出結果
 - name: Deploy Pi controllers
+  # 對 inventory.yml 裡 pis 群組的每一台執行
   hosts: pis
+  # 在 Pi 上用 sudo 執行（要裝套件、寫 /opt）
   become: true
-  # Only -e works here: "serial" is evaluated before inventory / group_vars are loaded.
+  # 一次部署幾台；預設全部同時。這裡只能用 -e 指定，因為它在讀 inventory / group_vars 之前就決定了
   serial: "{{ pi_batch_size | default('100%') }}"
 
+  # ════════════════════════════════════════════════════════════════════════════
+  # pre_tasks：部署前的檢查，在 PC（WSL）上跑，只跑一次（run_once）
+  # delegate_to: localhost = 在執行 Ansible 的這台電腦上做，而不是在 Pi 上
+  # ════════════════════════════════════════════════════════════════════════════
   pre_tasks:
-    # The PC may be on any of the addresses in pc_urls; use the first that answers.
+    # 【找控制中心】PC 可能是 pc_urls 裡的任何一個 IP，每個都試著連 /api/health（每個最多等 3 秒）。
+    # 連不到的不算失敗（failed_when: false），下一步再挑出連得到的。
+    # 用 -e pc_url=... 指定了位址時整步跳過。
     - name: Look for the control center at each address in pc_urls
       when: pc_url is not defined
       delegate_to: localhost
@@ -26,8 +37,10 @@
       loop: "{{ pc_urls }}"
       register: pc_probe
       failed_when: false
-      check_mode: false   # read-only, so it also runs in --check dry runs
+      check_mode: false   # 只是讀取，所以 --check 試跑時也照樣執行
 
+    # 【選位址】從上一步的結果挑出第一個回 200 的位址，存成 pc_url，後面每一步都用它。
+    # 都沒回應就存成空字串，交給下一步處理。
     - name: Use the first address that answered
       when: pc_url is not defined
       run_once: true
@@ -36,6 +49,8 @@
           {{ pc_probe.results | selectattr('status', 'defined') | selectattr('status', 'equalto', 200)
              | map(attribute='item') | first | default('') }}
 
+    # 【確認找到了】pc_url 是空的就停止部署，告訴你要檢查 Docker 和 PC 的 IP；
+    # 找到了就印出 "Using the control center at http://..."。
     - name: Stop when no address answered
       run_once: true
       ansible.builtin.assert:
@@ -45,6 +60,8 @@
           Is Docker Desktop running, and does the PC have one of these IPs (ipconfig)?
         success_msg: "Using the control center at {{ pc_url }}"
 
+    # 【讀控制中心狀態】再連一次 /api/health，把回應存起來（pc_health），
+    # 下一步要用裡面的 auth_required 判斷控制中心有沒有設 API token。
     - name: Check that the control center is reachable
       delegate_to: localhost
       become: false
@@ -54,12 +71,17 @@
       register: pc_health
       check_mode: false
 
+    # 【檢查 API token】控制中心的 .env 有設 API_TOKEN，但你沒用 -e pc_api_token=... 提供的話，
+    # 後面「註冊到控制中心」一定會被拒絕，所以在這裡就先停下來，不要白跑。
     - name: Fail early when the control center needs a token we do not have
       run_once: true
       ansible.builtin.assert:
         that: not (pc_health.json.auth_required | bool) or pc_api_token | length > 0
         fail_msg: The control center has API_TOKEN set; pass it with -e pc_api_token=...
 
+    # 【取得監控 agent 設定】向控制中心要 Beszel hub 的位址、金鑰（KEY）、註冊 token，
+    # 之後寫進每台 Pi 的 .env，Pi 上的監控 agent 才能連回 PC 回報 CPU / 溫度等數值。
+    # group_vars 的 monitoring: false 時跳過。
     - name: Get the Beszel agent settings from the control center
       when: monitoring | bool
       delegate_to: localhost
@@ -71,22 +93,30 @@
       register: agent_env
       check_mode: false
 
+    # 【擋掉 Pi 連不到的 hub 位址】如果 hub 位址是 localhost / 127.0.0.1，
+    # Pi 會以為是連「自己」，監控永遠連不上，所以直接停止並提醒你改用 PC 的區網 IP。
     - name: Refuse a hub URL the Pis cannot reach
       when: monitoring | bool and (agent_env.json.warning | default('', true) | length > 0)
       run_once: true
       ansible.builtin.fail:
         msg: "{{ agent_env.json.warning }} (list the PC's LAN IPs in pc_urls)"
 
+  # ════════════════════════════════════════════════════════════════════════════
+  # tasks：在每一台 Pi 上執行（除非註明 delegate_to: localhost）
+  # ════════════════════════════════════════════════════════════════════════════
   tasks:
-    # No default on purpose: a Uno deployed as a Mega would offer axes it does not have.
+    # 【檢查板子】inventory.yml 每台都要寫 board: mega 或 board: uno，
+    # 它決定 Pi 提供哪一套指令（控制中心顯示哪些軸）。
+    # 故意不給預設值：把 Uno 當成 Mega 部署，網頁會出現那台根本沒有的軸。
     - name: Check that the Pi's Arduino board is set
       ansible.builtin.assert:
         that: board is defined and board in ['mega', 'uno']
         fail_msg: "Set board: mega or board: uno for {{ inventory_hostname }} in inventory.yml"
         quiet: true
 
-    # Before Docker: Raspberry Pi OS trixie ships without iptables, and without it Docker
-    # cannot give containers a network.
+    # 【裝 git 和 iptables】git 用來下載 Pi 程式；iptables 是 Docker 建立容器網路需要的，
+    # 新版 Raspberry Pi OS（trixie）沒有內建，所以要在裝 Docker 之前先裝。
+    # 套件清單一天內更新過就不再更新（cache_valid_time），重跑比較快。
     - name: Install git and iptables
       ansible.builtin.apt:
         name: [git, iptables]
@@ -94,11 +124,16 @@
         update_cache: true
         cache_valid_time: 86400
 
+    # 【裝 Docker】用 Docker 官方的安裝腳本（內含 docker compose）。
+    # creates: /usr/bin/docker = 已經有 Docker 就整步跳過，不會重裝。
     - name: Install Docker (only when missing)
       ansible.builtin.shell: curl -fsSL https://get.docker.com | sh
       args:
         creates: /usr/bin/docker
 
+    # 【下載 Pi 程式】從 GitHub（pi_repo_url）把 Pi 專案的 pi_repo_version（預設 main）
+    # 下載或更新到 pi_dir（預設 /opt/pi-arduino-controller）。
+    # 結果存在 checkout，.env 裡的 APP_VERSION 會用到它的 commit 編號（例如 main@d7447a8）。
     - name: Check out the Pi project
       ansible.builtin.git:
         repo: "{{ pi_repo_url }}"
@@ -106,12 +141,18 @@
         version: "{{ pi_repo_version }}"
       register: checkout
 
+    # 【找 Arduino：1/4】看 /dev/serial/by-id 這個資料夾在不在。
+    # 有接 USB 序列裝置（Arduino）時 Linux 才會建立它。
+    # inventory 已經手動指定 serial_port 時，找 Arduino 的這幾步都跳過。
     - name: Check for USB serial devices
       when: serial_port is not defined
       ansible.builtin.stat:
         path: /dev/serial/by-id
       register: serial_dir
 
+    # 【找 Arduino：2/4】列出 /dev/serial/by-id 底下的裝置。
+    # 這裡的名稱包含 Arduino 的序號（例如 usb-Arduino__..._054403A4...-if00），
+    # 拔插或重開機都不會變，比 /dev/ttyACM0 這種會跳號的名稱可靠。
     - name: Look for the Arduino in /dev/serial/by-id
       when: serial_port is not defined and serial_dir.stat.exists
       ansible.builtin.find:
@@ -119,12 +160,17 @@
         file_type: link
       register: serial_ids
 
+    # 【找 Arduino：3/4】決定要用的序列埠，存成 pi_serial_port：
+    #   inventory 有寫 serial_port → 用它；否則用上一步找到的第一個；都沒有 → /dev/ttyUSB0。
+    # 沒接 Arduino 也能部署成功，只是控制中心會顯示 No Arduino。
     - name: Choose the serial port
       ansible.builtin.set_fact:
         pi_serial_port: >-
           {{ serial_port if serial_port is defined
              else (serial_ids.files | default([]) | map(attribute='path') | first | default('/dev/ttyUSB0')) }}
 
+    # 【找 Arduino：4/4】那台 Pi 接了不只一個 USB 序列裝置時印出警告：
+    # 自動選的不一定是 Arduino，要你在 inventory 為那台指定 serial_port。
     - name: Warn when several USB serial devices are attached
       when: serial_port is not defined and (serial_ids.matched | default(0)) > 1
       ansible.builtin.debug:
@@ -132,12 +178,17 @@
           {{ inventory_hostname }} has {{ serial_ids.matched }} USB serial devices; using {{ pi_serial_port }}.
           Set serial_port for this host in inventory.yml if that is not the Arduino.
 
+    # 【寫 .env】用 templates/pi.env.j2 產生 Pi 的設定檔：PI_ID、BOARD、序列埠、逾時、
+    # 版本、監控 agent 設定。權限 0600（只有 root 能讀），因為裡面有監控的註冊 token。
+    # 內容沒變就不會重寫。
     - name: Write the Pi's .env
       ansible.builtin.template:
         src: pi.env.j2
         dest: "{{ pi_dir }}/.env"
         mode: "0600"
 
+    # 【下載預先建好的 image】只有 group_vars 設了 pi_image（GitHub Actions 建好的 image）才執行，
+    # 比在 Pi 上 build 快很多。pi_image 是空的（目前的設定）就跳過，下一步會在 Pi 上 build。
     - name: Pull the prebuilt image
       when: pi_image | length > 0
       ansible.builtin.command: docker compose pull arduino-controller
@@ -146,18 +197,23 @@
       register: pull
       changed_when: "'Pulled' in pull.stderr or 'Downloaded newer image' in pull.stderr"
 
+    # 【啟動容器】docker compose up -d：啟動 Pi 控制程式，以及監控 agent（.env 有 COMPOSE_PROFILES=monitoring 時）。
+    # 沒設 pi_image 就加 --build 在 Pi 上 build（第一次要幾分鐘）；程式和設定都沒變就不會重啟容器。
+    # --remove-orphans：清掉 docker-compose.yml 裡已經不存在的舊服務。
     - name: Start the containers
       ansible.builtin.command: >-
         docker compose up -d --remove-orphans {{ '' if pi_image else '--build' }}
       args:
         chdir: "{{ pi_dir }}"
       environment:
-        # Default build attestations carry a timestamp, so every build would get a new image
-        # digest and recreate the container even when nothing changed.
+        # 關掉 build 附帶的 attestation：它含有時間戳記，
+        # 會讓每次 build 都變成「新 image」而重啟容器，即使什麼都沒改。
         BUILDX_NO_DEFAULT_ATTESTATIONS: "1"
       register: up
       changed_when: up.stderr is search('Recreated|Created|Started')
 
+    # 【關掉監控】group_vars 的 monitoring: false 時，停止並移除這台 Pi 上的監控 agent。
+    # monitoring: true（目前的設定）時跳過。
     - name: Stop the monitoring agent when monitoring is off
       when: not (monitoring | bool)
       ansible.builtin.command: docker compose --profile monitoring rm --stop --force beszel-agent
@@ -166,6 +222,8 @@
       register: agent_rm
       changed_when: agent_rm.stderr is search('Removed')
 
+    # 【等 Pi 程式啟動】在 Pi 上連自己的 /api/health，每 2 秒試一次、最多 30 次（約 60 秒）。
+    # 一直沒回應就算這台失敗（通常是程式啟動出錯，用 docker logs pi-arduino-controller 看原因）。
     - name: Wait until the Pi service answers
       ansible.builtin.uri:
         url: "http://127.0.0.1:{{ pi_port }}/api/health"
@@ -174,6 +232,9 @@
       retries: 30
       delay: 2
 
+    # 【註冊到控制中心】從 PC 對控制中心送 PUT /api/pi/<id>，告訴它這台 Pi 的 IP、port、名稱。
+    # 新的裝置回 201（顯示 changed），已經存在回 200，而且只更新 host / port / name，
+    # 你在網頁上改的顯示名稱、停車位置、監控綁定都會保留。
     - name: Register the Pi in the control center
       delegate_to: localhost
       become: false
@@ -190,6 +251,8 @@
       register: registered
       changed_when: registered.status == 201
 
+    # 【確認控制中心看得到】從 PC 問控制中心這台 Pi 的狀態，
+    # 控制中心會馬上連一次 Pi，確認 PC → Pi 這個方向真的通（防火牆、IP 都對）。
     - name: Ask the control center how it sees the Pi
       delegate_to: localhost
       become: false
@@ -198,6 +261,9 @@
       register: seen
       check_mode: false
 
+    # 【印出結果】每台一行，例如：
+    #   pi-01: online · board mega · version main@d7447a8 · serial /dev/serial/by-id/usb-Arduino...
+    # online = 正常；no-arduino = 程式有跑但找不到 Arduino；offline = 控制中心連不到這台 Pi。
     - name: Report
       ansible.builtin.debug:
         msg: >-
