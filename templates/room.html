@@ -76,6 +76,7 @@
       '\n\nThis page loads three.js from unpkg.com, so the browser needs internet access.';
   }
 </script>
+<script src="{{ url_for('static', filename='sim.js') }}?v={{ v }}" data-theme="dark" data-place="top"></script>
 <script type="module" src="{{ url_for('static', filename='room/main.js') }}?v={{ v }}"></script>
 </body>
 </html>

@@ -194,5 +194,6 @@
 {% for name in ['core', 'devices', 'health', 'charts', 'monitoring', 'park', 'main'] %}
 <script src="{{ url_for('static', filename='js/' ~ name ~ '.js') }}?v={{ v }}"></script>
 {% endfor %}
+<script src="{{ url_for('static', filename='sim.js') }}?v={{ v }}" data-theme="light" data-place="bottom"></script>
 </body>
 </html>

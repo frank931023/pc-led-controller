@@ -16,6 +16,8 @@ class Settings:
     room_file: str
     room_state_file: str
     setups_dir: str
+    # Simulation switch + pretend positions (data/simulation.json), see mcc/room.py.
+    simulation_file: str
 
     # Seconds a single command may take. Each Pi reports its own COMMAND_TIMEOUT and
     # MAX_COMMAND_TIMEOUT in /api/status and those win; these are only used before the
@@ -45,6 +47,7 @@ def load_settings():
         room_file=os.getenv('ROOM_FILE', os.path.join(data_dir, 'room.json')),
         room_state_file=os.path.join(data_dir, 'room_state.json'),
         setups_dir=os.path.join(data_dir, 'setups'),
+        simulation_file=os.path.join(data_dir, 'simulation.json'),
         default_command_timeout=float(os.getenv('DEFAULT_COMMAND_TIMEOUT', '130')),
         max_command_timeout=float(os.getenv('MAX_COMMAND_TIMEOUT', '300')),
         api_token=os.getenv('API_TOKEN', ''),

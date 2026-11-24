@@ -8,6 +8,9 @@ The 3D room and setups.
   POST /api/room/move              move one axis: {"axis", "target"}
   GET  /api/room/jobs[/<id>]       setup jobs (poll one until state is done / error / aborted)
   POST /api/room/stop              stop the running job after the axis moving now
+  GET  /api/room/simulation        simulation on / off, and the job waiting to be marked done
+  POST /api/room/simulation        {"on": true | false}
+  POST /api/room/jobs/<id>/finish  simulation only: {"result": "done"} or {"result": "error", "error"}
   /api/room/setups[/<id>]          saved setups: list / create, read / update / delete
 
 apply and move answer 202 right away with the job; the job runs in the background.
@@ -94,6 +97,36 @@ def room_stop(job_id=None):
     job = services.room.abort(job_id)
     if job is None:
         return fail('No setup is running', 409)
+    return ok(job=job)
+
+
+# ----- simulation (no Pis yet) -----
+
+@bp.route('/api/room/simulation', methods=['GET', 'POST'])
+def room_simulation():
+    """With simulation on, jobs move nothing and wait for the web page to mark them done."""
+    if request.method == 'POST':
+        data = json_object()
+        if data is None or not isinstance(data.get('on'), bool):
+            return fail('Send {"on": true} or {"on": false}', 400)
+        try:
+            services.room.set_simulation(data['on'])
+        except RoomError as e:
+            return fail(str(e), e.http_status)
+    return ok(on=services.room.sim.on, job=services.room.waiting_job())
+
+
+@bp.post('/api/room/jobs/<job_id>/finish')
+def room_finish(job_id):
+    """Answer a simulated job as if the rig had moved (done) or failed (error)."""
+    data = json_object()
+    if data is None or data.get('result') not in ('done', 'error'):
+        return fail('Send {"result": "done"} or {"result": "error", "error": "why"}', 400)
+    try:
+        job = services.room.finish_simulated(job_id, data['result'] == 'done',
+                                             str(data.get('error') or '')[:300])
+    except RoomError as e:
+        return fail(str(e), e.http_status)
     return ok(job=job)
 
 

@@ -9,7 +9,7 @@ from .alerts import AlertEngine
 from .beszel import BeszelClient, BeszelSync
 from .devices import DeviceStore
 from .monitor import StatusMonitor
-from .room import Room, RoomConfig, RoomState
+from .room import Room, RoomConfig, RoomState, Simulation
 from .setups import SetupStore
 
 # The axis table that ships with the code; data/room.json (settings.room_file) overrides it.
@@ -35,5 +35,6 @@ def init(app_settings):
     alerts = AlertEngine(settings.alerts_file)
     health = BeszelSync(BeszelClient(settings.beszel_url, settings.beszel_email, settings.beszel_password), store)
     health.on_sync = alerts.evaluate      # alerts are re-evaluated after every health sync
-    room = Room(RoomConfig([settings.room_file, BUNDLED_ROOM]), RoomState(settings.room_state_file))
+    room = Room(RoomConfig([settings.room_file, BUNDLED_ROOM]), RoomState(settings.room_state_file),
+                Simulation(settings.simulation_file))
     setups = SetupStore(settings.setups_dir, SETUP_LIBRARY)

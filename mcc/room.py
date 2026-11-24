@@ -22,6 +22,12 @@ device counts as not homed, and the next setup homes it before moving it.
 
 Positions are what we last *sent*, not measured: the steppers are open loop, and asking
 the firmware (SXP...) would just echo its own step count back.
+
+Simulation (no Pis yet)
+-----------------------
+With simulation on, a job sends nothing: it waits until someone on the web page marks it
+done (or failed), then the axes "are" at their targets. ACQUA polls the same job and
+cannot tell the difference, so the whole ACQUA -> MCC path can be tried without hardware.
 """
 
 import json
@@ -65,14 +71,22 @@ class RoomConfigError(ValueError):
 @dataclass(frozen=True)
 class Axis:
     id: str
-    device: str
-    ch: str
+    device: str | None      # None: not wired to a Pi yet (3D room / simulation only)
+    ch: str | None
     min: float
     max: float
     unit: str
     label: str
     speed: float
     default: float
+    # True once someone checked on the real rig that device + ch drive this axis and that
+    # min / max match the calibrated travel. Until then the axis never moves for real.
+    verified: bool = False
+    note: str = ''
+
+    @property
+    def wired(self):
+        return self.device is not None
 
     @property
     def needs_home(self):
@@ -90,6 +104,8 @@ class Axis:
         return self.min + device_value / 1000.0
 
     def move_command(self, value):
+        if not self.wired:
+            return f'(not wired: {self.to_device(value)})'
         return f'{self.ch}M,{self.to_device(value)}'
 
     @property
@@ -102,7 +118,13 @@ class Axis:
     def view(self):
         return {'id': self.id, 'device': self.device, 'ch': self.ch, 'label': self.label,
                 'unit': self.unit, 'min': self.min, 'max': self.max,
-                'speed': self.speed, 'default': self.default}
+                'speed': self.speed, 'default': self.default,
+                'wired': self.wired, 'verified': self.verified, 'note': self.note}
+
+    @property
+    def ready(self):
+        """May move on the real rig: wired to a Pi and verified there (room.json)."""
+        return self.wired and self.verified
 
 
 def parse_axes(data):
@@ -126,28 +148,39 @@ def parse_axes(data):
             errors.append(f'{where}: min / max / speed / default must be numbers')
             continue
         problems = []
+        device, ch = row.get('device'), row.get('ch')
         if not aid or aid in ids:
             problems.append('id missing or repeated')
-        if not ID_RE.match(str(row.get('device') or '')):
-            problems.append('bad device id')
-        if row.get('ch') not in CHANNELS:
-            problems.append(f'ch must be one of {", ".join(CHANNELS)}')
+        if device is None:
+            if ch is not None:
+                problems.append('ch is set but device is null')
+            if row.get('verified'):
+                problems.append('verified needs a device and ch')
+        else:
+            if not ID_RE.match(str(device)):
+                problems.append('bad device id')
+            if ch not in CHANNELS:
+                problems.append(f'ch must be one of {", ".join(CHANNELS)}')
+        if not isinstance(row.get('verified', False), bool):
+            problems.append('verified must be true or false')
         if row.get('unit') not in UNITS:
             problems.append('unit must be m or deg')
         if not low < high:
             problems.append('min must be below max')
         if speed <= 0:
             problems.append('speed must be above 0')
-        key = (row.get('device'), row.get('ch'))
-        if key in wiring:
-            problems.append(f'{key[0]} {key[1]} is already used by {wiring[key]}')
+        key = (device, ch)
+        if device is not None and key in wiring:
+            problems.append(f'{device} {ch} is already used by {wiring[key]}')
         if problems:
             errors.append(f'{where}: {"; ".join(problems)}')
             continue
         ids.add(aid)
-        wiring[key] = aid
-        axes.append(Axis(aid, row['device'], row['ch'], low, high, row['unit'],
-                         str(row.get('label') or aid), speed, min(high, max(low, default))))
+        if device is not None:
+            wiring[key] = aid
+        axes.append(Axis(aid, device, ch, low, high, row['unit'],
+                         str(row.get('label') or aid), speed, min(high, max(low, default)),
+                         verified=bool(row.get('verified', False)), note=str(row.get('note') or '')))
     if errors:
         raise RoomConfigError('; '.join(errors))
     return axes
@@ -336,6 +369,53 @@ class RoomState:
             self._save()
 
 
+class Simulation:
+    """
+    Simulation switch + where each axis "is" while simulating (room units, by axis id).
+    Kept apart from RoomState on purpose: pretend positions must never be mistaken for
+    real ones once the Pis are connected. Saved to data/simulation.json.
+    """
+
+    def __init__(self, path):
+        self._path = path
+        self._lock = threading.Lock()
+        self.on = False
+        self._axes = {}
+        if not path:
+            return
+        try:
+            with open(path, encoding='utf-8') as f:
+                data = json.load(f)
+            self.on = bool(data.get('on'))
+            self._axes = {str(k): float(v) for k, v in (data.get('axes') or {}).items()}
+        except FileNotFoundError:
+            pass
+        except (OSError, ValueError, TypeError, AttributeError) as e:
+            log.warning('Ignoring unreadable %s (%s)', path, e)
+
+    def _save(self):
+        if not self._path:
+            return
+        try:
+            write_json_atomic(self._path, {'on': self.on, 'axes': self._axes})
+        except OSError as e:
+            log.warning('Could not save %s: %s', self._path, e)
+
+    def set(self, on):
+        with self._lock:
+            self.on = bool(on)
+            self._save()
+
+    def position(self, axis_id):
+        with self._lock:
+            return self._axes.get(axis_id)
+
+    def arrive(self, targets):
+        with self._lock:
+            self._axes.update(targets)
+            self._save()
+
+
 # ════════════════════════════════════════════════════════════════════════════
 #  Setup jobs
 # ════════════════════════════════════════════════════════════════════════════
@@ -357,9 +437,10 @@ ACTIVE = ('running', 'aborting')
 
 
 class Room:
-    def __init__(self, config, state):
+    def __init__(self, config, state, simulation=None):
         self.config = config
         self.state = state
+        self.sim = simulation or Simulation(None)
         self._lock = threading.RLock()
         self._jobs = OrderedDict()          # id -> job (newest last)
         self._current = None                # id of the newest job
@@ -376,11 +457,25 @@ class Room:
         for device_id in device_ids:
             self.state.note_session(device_id, services.monitor.info(device_id).get('arduino_session'))
 
-    def _usable_position(self, ax):
+    def _usable_position(self, ax, simulated=False):
         """Where the axis is in firmware units, or None when that is not known."""
+        if simulated:
+            value = self.sim.position(ax.id)
+            return None if value is None else ax.to_device(value)
         if ax.needs_home and not self.state.homed(ax.device, ax.ch):
             return None
         return self.state.position(ax.device, ax.ch)
+
+    def device_positions(self, axis_ids, simulated=False):
+        """{device: {"<ch>M": firmware value}} for the given axes whose position is known
+        (the format ACQUA sends its targets in)."""
+        out = {}
+        for ax in self.config.axes():
+            if ax.id in axis_ids:
+                pos = self._usable_position(ax, simulated)
+                if pos is not None:
+                    out.setdefault(ax.device, {})[f'{ax.ch}M'] = pos
+        return out
 
     # ----- called for every command (see dispatch.run) -----
 
@@ -425,43 +520,58 @@ class Room:
         if problems:
             raise RoomError('The setup has invalid axes', 400, problems)
 
-        devices = list(OrderedDict.fromkeys(by_id[aid].device for aid in by_id if aid in wanted))
+        devices = list(OrderedDict.fromkeys(by_id[aid].device for aid in by_id
+                                            if aid in wanted and by_id[aid].wired))
+        simulated = self.sim.on
+        if not simulated:
+            # an axis nobody has checked on the real rig never moves for real
+            unwired = [aid for aid in wanted if not by_id[aid].wired]
+            unverified = [aid for aid in wanted if by_id[aid].wired and not by_id[aid].verified]
+            if unverified:
+                problems.append('Not verified on the real rig yet (room.json "verified": false): '
+                                + ', '.join(unverified))
+            if unwired:
+                problems.append('Not wired to a Pi yet (room.json "device": null): ' + ', '.join(unwired))
+            if problems:
+                raise RoomError('Some axes are not set up for the real rig yet', 503, problems)
         with self._lock:
             current = self._jobs.get(self._current)
             if current and current['state'] in ACTIVE:
                 raise RoomError(f'Another setup is still moving: "{current["name"]}"', 409)
 
-            for device_id in devices:
-                if services.store.get(device_id) is None:
-                    problems.append(f'{device_id} is not in the device list')
-                    continue
-                status = services.monitor.status(device_id)
-                if services.monitor.running(device_id):
-                    problems.append(f'{device_id} is running {services.monitor.running(device_id)}')
-                elif status != pi_client.ONLINE:
-                    problems.append(f'{device_id} is {status}')
-            if problems:
-                raise RoomError('Some devices cannot move right now', 409, problems)
+            if not simulated:
+                # busy (someone else is using it) is worth retrying later: 409;
+                # offline / missing / no Arduino is not: 503
+                busy, down = [], []
+                for device_id in devices:
+                    if services.store.get(device_id) is None:
+                        down.append(f'{device_id} is not in the device list')
+                    elif services.monitor.running(device_id):
+                        busy.append(f'{device_id} is running {services.monitor.running(device_id)}')
+                    elif services.monitor.status(device_id) != pi_client.ONLINE:
+                        down.append(f'{device_id} is {services.monitor.status(device_id)}')
+                if busy or down:
+                    raise RoomError('Some devices cannot move right now', 409 if busy else 503, busy + down)
+                self._sync_sessions(devices)
 
-            self._sync_sessions(devices)
-            job = self._plan(by_id, wanted, devices, name, source)
+            job = self._plan(by_id, wanted, devices, name, source, simulated)
             self._jobs[job['id']] = job
             self._current = job['id']
             self._trim()
             view = self._view(job)
 
-        if job['state'] == 'running':
+        if job['state'] == 'running' and not simulated:
             threading.Thread(target=self._run, args=(job['id'],), daemon=True, name='room-job').start()
         return view
 
-    def _plan(self, by_id, wanted, devices, name, source):
+    def _plan(self, by_id, wanted, devices, name, source, simulated=False):
         """Steps in axis-table order; axes already at their target are left out."""
         steps, unchanged = [], []
         for ax in by_id.values():
             if ax.id not in wanted:
                 continue
             target = wanted[ax.id]
-            pos = self._usable_position(ax)
+            pos = self._usable_position(ax, simulated)
             if pos is not None and pos == ax.to_device(target):
                 unchanged.append(ax.id)
                 continue
@@ -482,6 +592,8 @@ class Room:
             'created': now, 'started': now, 'finished': None if steps else now,
             'index': 0, 'steps': steps, 'unchanged': unchanged, 'targets': wanted,
             'devices': devices, 'eta': round(sum(s['seconds'] for s in steps), 1),
+            # simulated: nothing is sent; the job waits for finish_simulated() (web page)
+            'simulated': simulated,
         }
 
     def _trim(self):
@@ -511,7 +623,7 @@ class Room:
                     step['state'], step['error'], step['finished'] = 'failed', str(e), time.time()
                     for s in job['steps'][index + 1:]:
                         s['state'] = 'skipped'
-                    job['state'], job['error'] = 'error', f'{step["label"]}: {e}'
+                    job['state'], job['error'] = 'error', f'{step["device"]} {step["label"]}: {e}'
                     job['finished'] = time.time()
                 log.warning('Setup "%s" failed: %s', job['name'], job['error'])
                 return
@@ -600,14 +712,63 @@ class Room:
             job = self._jobs.get(job_id or self._current)
             if not job or job['state'] not in ACTIVE:
                 return None
-            job['state'] = 'aborting'
+            if job['simulated']:                # nothing is moving: stop right away
+                for s in job['steps']:
+                    s['state'] = 'skipped'
+                job['state'], job['finished'] = 'aborted', time.time()
+            else:
+                job['state'] = 'aborting'
+            return self._view(job)
+
+    # ----- simulation -----
+
+    def set_simulation(self, on):
+        """Switch simulation on / off. Refused while a job is running (either kind)."""
+        with self._lock:
+            job = self._jobs.get(self._current)
+            if job and job['state'] in ACTIVE and bool(on) != self.sim.on:
+                raise RoomError(f'Finish or stop "{job["name"]}" first', 409)
+            self.sim.set(on)
+
+    def waiting_job(self):
+        """The simulated job waiting for someone to mark it done, or None."""
+        with self._lock:
+            job = self._jobs.get(self._current)
+            if job and job['simulated'] and job['state'] == 'running':
+                return self._view(job)
+            return None
+
+    def finish_simulated(self, job_id, success, error=''):
+        """Mark a waiting simulated job done (axes arrive at their targets) or failed."""
+        with self._lock:
+            job = self._jobs.get(job_id)
+            if job is None:
+                raise RoomError('Job not found', 404)
+            if not job['simulated'] or job['state'] != 'running':
+                raise RoomError(f'"{job["name"]}" is not waiting for a simulated result ({job["state"]})', 409)
+            now = time.time()
+            if success:
+                for s in job['steps']:
+                    s['state'], s['started'], s['finished'] = 'done', s['started'] or now, now
+                self.sim.arrive(job['targets'])
+                job['state'], job['index'] = 'done', len(job['steps'])
+            else:
+                first = job['steps'][0]
+                first['state'], first['error'] = 'failed', error or 'Simulated failure'
+                for s in job['steps'][1:]:
+                    s['state'] = 'skipped'
+                job['state'] = 'error'
+                job['error'] = f'{first["device"]} {first["label"]}: {first["error"]} (simulated)'
+            job['finished'] = now
             return self._view(job)
 
     def snapshot(self):
         """Every axis's position, the current job, and the devices: what the 3D room shows."""
         axes = self.config.axes()
-        devices = list(OrderedDict.fromkeys(a.device for a in axes))
-        self._sync_sessions(devices)
+        devices = list(OrderedDict.fromkeys(a.device for a in axes if a.wired))
+        simulated = self.sim.on
+        if not simulated:
+            self._sync_sessions(devices)
         with self._lock:
             job = self._jobs.get(self._current)
             moving = {}
@@ -617,14 +778,15 @@ class Room:
                         moving[s['axis']] = self._estimate(s, s['_axis'])
             out_axes = {}
             for ax in axes:
-                pos = self._usable_position(ax)
+                pos = self._usable_position(ax, simulated)
                 known = pos is not None
                 value = moving.get(ax.id, ax.to_room(pos) if known else ax.default)
                 out_axes[ax.id] = {
                     'value': round(value, 4),
                     'estimated': ax.id in moving or not known,
                     'known': known,
-                    'homed': not ax.needs_home or self.state.homed(ax.device, ax.ch),
+                    'homed': simulated or not ax.needs_home or self.state.homed(ax.device, ax.ch),
+                    'ready': ax.ready,                  # may move on the real rig
                 }
             job_view = self._view(job)
 
@@ -639,4 +801,5 @@ class Room:
                 'name': device.get('alternative_name') or device.get('name') or device_id,
                 'homed': self.state.homed_channels(device_id),
             }
-        return {'axes': out_axes, 'job': job_view, 'devices': out_devices, 'config': self.config.info()}
+        return {'axes': out_axes, 'job': job_view, 'devices': out_devices,
+                'config': self.config.info(), 'simulation': simulated}

@@ -114,7 +114,11 @@ export function createLive({ controls, applyToScene, statusHost }) {
         : 'Not known: not homed since the Arduino restarted (a setup homes it first)';
       c.out.classList.toggle('est', !!a.estimated);
       c.wrap.classList.toggle('moving', id === movingAxis);
-      c.el.disabled = busy || pendingId !== null;
+      // not wired / not verified in room.json: never moves for real (simulation is fine)
+      const locked = !a.ready && !snap.simulation;
+      c.el.disabled = busy || pendingId !== null || locked;
+      c.wrap.classList.toggle('locked', locked);
+      c.wrap.title = locked ? 'Not set up for the real rig yet: fill in device / ch and set "verified": true in room.json' : '';
       // Keep the slider on the rig position, except while a hand is on it: the poll would
       // otherwise snatch it back mid-drag.
       const touching = document.activeElement === c.el || !c.tgt.hidden;
@@ -146,14 +150,24 @@ export function createLive({ controls, applyToScene, statusHost }) {
           d.note ? ' · ' + esc(d.note) : ''}">${esc(id.replace(/^pi-/, ''))}</span>`;
       }).join('')}</div>`);
       const bad = devs.filter(([, d]) => d.status !== 'online');
-      if (bad.length) {
+      if (snap.simulation) {
+        parts.push(`<div class="lvnote">Simulation is on: nothing is sent to the Pis. Each setup waits
+          for you to mark it done in the window that pops up.</div>`);
+      } else if (bad.length) {
         parts.push(`<div class="lvnote">${bad.length} of ${devs.length} devices are not online:
           their axes cannot move. See the Devices page for why.</div>`);
       }
     }
 
-    const unknown = Object.values(snap?.axes || {}).filter((a) => !a.known).length;
-    if (unknown) {
+    const allAxes = Object.values(snap?.axes || {});
+    const notReady = allAxes.filter((a) => !a.ready).length;
+    if (notReady && !snap.simulation) {
+      parts.push(`<div class="lvnote">${notReady} of ${allAxes.length} axes are not verified on the real rig yet
+        (greyed out): they never move for real. Fill in their wiring in <code>room.json</code>.</div>`);
+    }
+
+    const unknown = allAxes.filter((a) => !a.known && a.ready).length;
+    if (unknown && !snap.simulation) {
       parts.push(`<div class="lvnote">${unknown} axes are not homed since their Arduino last started
         (shown with "?"). Moving them homes them first.</div>`);
     }
@@ -164,7 +178,7 @@ export function createLive({ controls, applyToScene, statusHost }) {
       const pct = Math.round((job.index / Math.max(1, job.steps.length)) * 100);
       parts.push(`<div class="lv job">
         <b>${job.state === 'aborting' ? 'Finishing the current axis' : esc(job.name)}</b>
-        <div class="sub">${step ? `${STEP_TEXT[step.state] || 'Waiting'}: ${esc(step.label)}
+        <div class="sub">${job.simulated ? 'Simulated: waiting for “Mark as done”' : step ? `${STEP_TEXT[step.state] || 'Waiting'}: ${esc(step.label)}
           ${fmt.by(step.unit)(step.from)} → ${fmt.by(step.unit)(step.to)}` : ''}</div>
         <div class="pb"><i style="width:${pct}%"></i></div>
         <div class="sub">${job.steps.length > 1 ? `Axis ${job.index + 1} of ${job.steps.length} · ` : ''}
@@ -312,7 +326,7 @@ export function createLive({ controls, applyToScene, statusHost }) {
         state: 'live',
         total: axes.length,
         unknown: axes.filter(([, a]) => !a.known).length,
-        offline: devs.filter((d) => d.status !== 'online').length,
+        offline: s.simulation ? 0 : devs.filter((d) => d.status !== 'online').length,
         devices: devs.length,
         busy: !!(s.job && ACTIVE.includes(s.job.state)),
       };

@@ -50,7 +50,7 @@ mcc/                    應用程式本體
   config.py               所有環境變數設定（.env）集中在這裡
   services.py             所有路由共用的長駐物件（裝置清單、狀態監控、健康同步、告警、3D 房間）
   dispatch.py             送一個韌體指令（指令 API 和 setup 工作共用：同一把鎖、同樣更新歸位狀態）
-  room.py                 3D 房間：軸對應表、歸位 / 位置狀態、setup 工作（一次一軸）
+  room.py                 3D 房間：軸對應表、歸位 / 位置狀態、setup 工作（一次一軸）、模擬模式
   room.json               內建的軸對應表（data/room.json 存在時以它為準）
   setups.py               存好的 setup（data/setups/）與內建範例（setup_library/），含 overlays
   setup_library/          內建範例 setup（唯讀）：MS Teams V5 的 14 個 test setup
@@ -67,10 +67,12 @@ mcc/                    應用程式本體
     commands.py             測試連線、指令表、送指令（含逾時決定）
     monitoring.py           健康監控：綁定 agent、歷史、容器、agent 設定
     alerts.py               告警規則與 webhook 測試
-    room.py                 3D 房間頁、套用 setup、工作進度、存好的 setup
+    room.py                 3D 房間頁、套用 setup、工作進度、存好的 setup、模擬開關
+    motion.py               給 ACQUA 的移動作業 API（/api/motion/jobs）：韌體數值 → 軸 → 同一個 setup 工作
 templates/index.html    頁面骨架與對話框
 templates/room.html     3D 房間頁（three.js 從 CDN 載入，不需要 build）
 static/style.css        樣式（沿用 ACQUA-Automation 的設計：主色 #009B85 + 白），依區塊分段
+static/sim.js           模擬模式的浮動按鈕與「setup 等待確認」視窗（儀表板和 3D 房間都有）
 static/js/              前端，依功能分檔、照順序載入、不需要 build
   core.js                 設定、共用狀態、api()、API token、通知、確認視窗
   devices.js              Devices 頁：裝置清單、控制面板、指令紀錄、新增 / 改名 / 移除
@@ -201,8 +203,9 @@ python app.py
 - **Live 模式**：3D 顯示控制中心回報的實機位置；拉桿放手會先跳確認（從哪到哪、多遠、多久、哪個指令）才移動；
   也可以選一個存好的 setup **Apply to the rig**，或把目前實機位置存成 setup
 
-**setup 由這個專案執行**：ACQUA Automation 只要送「setup 名稱 + 每根軸的目標（公尺 / 度）」到
-`POST /api/room/apply`，再輪詢 job 直到完成，見 [API](#post-apiroomapply給-acqua-automation-用)。
+**setup 由這個專案執行**：ACQUA Automation 送「擺位名稱 + 每台 Pi 的目標（韌體數值）」到
+`POST /api/motion/jobs`，再每秒輪詢直到完成，見 [API](#post-apimotionjobs給-acqua-automation-用)。
+（`POST /api/room/apply` 是同一件事、用公尺 / 度和軸 id 表示，3D 房間用它。）
 控制中心負責：
 
 1. **對應**：哪根軸在哪台 Pi、哪個韌體軸、公尺換算成 mm，寫在軸對應表 `mcc/room.json`
@@ -213,6 +216,43 @@ python app.py
 4. **失敗判斷**：韌體回 `ERR`、`Exceeded Max travel`（沒校正或超出校正行程）、`ERROR: ...`，都算失敗並停止後面的軸
 
 手動按 Home（Devices 頁、Home all）也算歸位，之後的 setup 不會再歸位一次。
+
+#### 補上實機對應（`room.json`）
+
+目前每根軸接在哪台 Pi、哪個馬達**都還沒跟實機對過**：`mcc/room.json` 裡的 `device` / `ch` 只是預定的規劃
+（跟 ACQUA 的 `acqua/crane.py` 一樣），行程 `min` / `max` 也還沒校正。每一列分成兩半：
+
+```jsonc
+//  ── 場景（3D 房間和 setup 用，id 不要改）──────────────────────────────   ── 實機對應（到現場補）──────────────────────────
+{"id": "hats.z", "label": "HATS — Z (lower rail)", "unit": "m", "min": -1.85, "max": 1.85, ...,   "device": "pi-03", "ch": "SZ", "verified": false, "note": ""}
+```
+
+| 欄位 | 填什麼 |
+|---|---|
+| `device` | 驅動這根軸的 Pi（裝置清單的 Device ID，`pi-01` ~ `pi-07`）；還沒接就填 `null`（`ch` 也填 `null`） |
+| `ch` | 那台 Arduino 上的韌體軸：`SX` / `SY` / `SZ`（滑軌）、`R`（轉盤）、`T`（傾角）。不確定的話在 Devices 頁對那台送 `<ch>H`，看哪個馬達歸位 |
+| `min` / `max` | 行程（房間座標，公尺或度）。滑軌的韌體 0 mm = 歸位開關 = `min`，所以 `max = min + 校正行程 mm / 1000` |
+| `verified` | 上面都在實機確認過了就改成 `true` |
+| `note` | 隨意備註（馬達型號、Arduino 腳位、注意事項） |
+
+**`verified: false` 的軸絕對不會真的動**：3D 房間（Live 模式顯示為灰色）和模擬模式照常可以用，
+但真的 setup 只要包含它就整個拒絕（`503`，一軸都不動），訊息會列出是哪幾軸。
+所以可以一台一台補：先把 `pi-03` 的五根軸對好、改成 `true`，就只有它們能動。
+
+改法：複製到 `data/room.json` 再改（存檔就生效，不用重建 image）；JSON 寫壞時會沿用上一版並在 3D 房間顯示錯誤。
+⚠️ ACQUA 是用「Pi + 指令」送目標的，所以 `device` / `ch` 改了之後，ACQUA 的 `acqua/crane.py` 也要改成一樣。
+
+#### 模擬模式（還沒有 Pi 的時候）
+
+頁面底部（3D 房間在上方）有一顆 **Simulation off** 按鈕，按下去可以開啟模擬。開啟後：
+
+- setup 工作（ACQUA 送來的，或 3D 房間按 Apply）**不送任何指令給 Pi**，也不檢查 Pi 在不在線
+- 網頁會**跳出視窗**，列出這個擺位會動哪些軸、送什麼指令（例如 `SZM,3350`）
+  - **✓ Mark as done**：當作全部到位，ACQUA 輪詢會拿到 `state: "done"` 和 `positions`，3D 房間的物件會移過去
+  - **Mark as failed…**：填原因，ACQUA 拿到 `state: "error"` 和這段文字
+  - **Later**：先關掉視窗，浮動按鈕會變成「setup waiting」，按它可以再打開
+- 模擬的位置另外存在 `data/simulation.json`，**不會混進真實的歸位 / 位置狀態**；關掉模擬就回到真實狀態
+- 有工作在跑的時候不能切換模擬（先完成或停止）。接上真的 Pi 前記得關掉
 
 #### 示意圓、標記點、距離
 
@@ -430,10 +470,11 @@ python app.py
 |---|---|---|
 | `data/pi_config.json` | 裝置清單（含停車位置、Beszel 綁定） | ✗（`.gitignore`） |
 | `data/alerts.json` | 告警規則與 webhook URL（第一次在網頁上儲存時產生） | ✗（`.gitignore`） |
-| `mcc/room.json` | 內建的軸對應表（哪根軸在哪台 Pi、行程、**移動順序**） | ✓ |
+| `mcc/room.json` | 內建的軸對應表（哪根軸在哪台 Pi、行程、**移動順序**、是否已在實機確認 `verified`） | ✓ |
 | `data/room.json` | （選用）本機的軸對應表，存在時取代 `mcc/room.json`，改完存檔就生效、不用重建 | ✗ |
 | `data/room_state.json` | 每台 Arduino 的開機識別、哪幾軸已歸位、每軸最後送出的位置（重啟控制中心後保留） | ✗ |
 | `data/setups/` | 3D 房間存的 setup，一個檔案一個（含 overlays） | ✗ |
+| `data/simulation.json` | 模擬模式開關，以及模擬中每根軸的「假裝位置」（與真實狀態分開） | ✗ |
 | `mcc/setup_library/` | 內建範例 setup（MS Teams V5 × 14，唯讀；要改請另存一份） | ✓ |
 | `beszel_data/` | Beszel 帳號、系統、歷史數據 | ✗（`.gitignore`） |
 
@@ -493,12 +534,16 @@ python app.py
 | `GET` | `/api/alerts` | 告警規則、觸發中的告警、最近的觸發 / 解除紀錄 |
 | `PUT` | `/api/alerts` | 儲存告警規則 / webhook URL |
 | `POST` | `/api/alerts/test` | 對 webhook 送一則測試訊息 |
+| `POST` | `/api/motion/jobs` | **ACQUA 送擺位**：`{label, targets: {pi: {SZM: 3350}}}`，馬上回 `job_id` |
+| `GET` | `/api/motion/jobs/<id>` | ACQUA 輪詢：`running` / `done` / `error` / `aborted` + `positions` |
 | `GET` | `/api/room/axes` | 軸對應表（順序 = 移動順序） |
 | `GET` | `/api/room/live` | 每根軸目前位置、目前的 setup 工作、相關裝置狀態 |
 | `POST` | `/api/room/apply` | **移動到一個 setup**（馬上回 job，背景一次一軸執行） |
 | `POST` | `/api/room/move` | 移動單一軸（同樣是 job） |
 | `GET` | `/api/room/jobs` / `/api/room/jobs/<id>` | setup 工作進度（輪詢到結束） |
 | `POST` | `/api/room/stop` | 停止目前的 setup（正在動的那一軸會走完） |
+| `GET`/`POST` | `/api/room/simulation` | 模擬模式：查詢（含等待確認的工作）/ 開關 `{"on": true}` |
+| `POST` | `/api/room/jobs/<id>/finish` | 模擬模式：回報結果 `{"result": "done"}` 或 `{"result": "error", "error": "原因"}` |
 | `GET`/`POST` | `/api/room/setups` | 存好的 setup：列出 / 新增 |
 | `GET`/`POST`/`DELETE` | `/api/room/setups/<id>` | 讀 / 更新 / 刪除一個 setup |
 
@@ -677,7 +722,54 @@ python app.py
 
 `POST /api/alerts/test`：送一則測試訊息到目前的 webhook URL；沒設定時回 `400`，送失敗回 `502`。
 
-### `POST /api/room/apply`（給 ACQUA Automation 用）
+### `POST /api/motion/jobs`（給 ACQUA Automation 用）
+
+規格在 ACQUA 專案的 `docs/MCC_MOTION_API.md`，ACQUA 的 `acqua/crane.py`（`HttpCrane`）就是照這個送：
+
+```json
+{ "label": "location2",
+  "targets": { "pi-03": { "SZM": 3350, "SXM": 1100, "SYM": 450, "RM": 0, "TM": 0 },
+               "pi-04": { "SZM": 650,  "SYM": 500 } } }
+```
+
+收到之後控制中心這樣處理：
+
+1. **翻譯**：每個「裝置 + 指令」對照軸對應表 `room.json`（`pi-03` + `SZM` → `hats.z`），
+   韌體數值換回公尺 / 度，交給和 3D 房間**同一個 setup 工作**。送來的順序不重要
+2. **先全部檢查**，有任何一項不通過就整個拒絕、一軸都不動，`error` 是一句看得懂的原因（ACQUA 會照抄記錄）：
+
+   | 狀態碼 | 什麼時候 |
+   |---|---|
+   | `400` | 裝置不在軸對應表（例如 `pi-003`）、不認得的指令鍵、那台 Pi 沒有這個軸、不是數字、超出行程 |
+   | `409` | 已經有工作在跑、某台裝置正在執行別的指令（例如有人在網頁手動操作） |
+   | `503` | 某台裝置不在清單 / offline / no-arduino，或某根軸還沒在實機確認（`room.json` 的 `"verified": false`） |
+   | `401` | 有設 `API_TOKEN` 但沒帶或帶錯 |
+
+3. **執行**：照軸對應表的順序**一次一軸**；那軸自 Arduino 開機後還沒歸位就先歸位；已經在目標的軸不送指令
+4. 回 `202 {"status": "success", "job_id": "4766a66731a7"}`
+
+然後 ACQUA 每秒 `GET /api/motion/jobs/<job_id>`：
+
+```json
+{ "status": "success",
+  "job": { "job_id": "4766a66731a7", "label": "location2", "state": "done", "error": null,
+           "positions": { "pi-03": { "SZM": 3350, "SXM": 1100, "SYM": 450, "RM": 0 }, "pi-04": { ... } },
+           "progress": { "done": 6, "total": 6, "unchanged": 0 }, "eta_seconds": 36.0,
+           "simulated": false, "warnings": [] } }
+```
+
+- `state`：`running` → `done` / `error` / `aborted`（不會出現 `queued`，收到就開始）
+- `done` 的條件：每個指令都回 `DONE`，**而且**沒有 `Exceeded Max travel.` / `ERROR:`。
+  超出行程算 `error`，例如 `"pi-03 HATS — Z (lower rail): SZM,3350: beyond the calibrated travel (...)"`
+- `positions` 只在結束時給：每根要求的軸最後在哪（韌體數值）；失敗那一軸位置未知就不列
+- `warnings`：有 `TM` 時提醒「韌體還沒實作傾角，頭不會動」
+- `progress`、`eta_seconds`、`simulated`、`warnings` 是額外資訊，ACQUA 不需要讀
+- 找不到 job（控制中心重啟過）回 `404`
+
+> ⚠️ ACQUA 的 `acqua/crane.py` 目前寫 `pi-001` ~ `pi-007`，這邊是 `pi-01` ~ `pi-07`，要改成兩位數才對得上
+> （現在送三位數會回 `400 "pi-003: no such device"`）。
+
+### `POST /api/room/apply`（3D 房間 / 用公尺表示的 setup）
 
 ```json
 { "name": "0915-1", "source": "acqua",
@@ -688,7 +780,8 @@ python app.py
 - 也可以送 `{"setup_id": "..."}` 套用這裡存好的 setup
 - **先全部檢查才開始動**，任何一項不通過就回錯誤、一軸都不動：
   - `400`：未知的軸、不是數字、超出行程 → `problems` 列出每一項
-  - `409`：有 setup 正在跑、裝置不在清單 / 不在線上 / 正在執行別的指令 → `problems` 列出每一台
+  - `409`：有 setup 正在跑、裝置正在執行別的指令 → `problems` 列出每一台
+  - `503`：裝置不在清單 / 不在線上，或軸還沒在實機確認（`verified: false`）/ 沒接 Pi → `problems` 列出
 - 通過就回 `202` 和 job（這時還沒動完）：
 
 ```json
@@ -718,9 +811,11 @@ python app.py
 { "axes": { "hats.mrp": { "value": 1.2, "estimated": false, "known": true, "homed": true }, ... },
   "job": { ... 目前（最近一次）的 job ... },
   "devices": { "pi-03": { "status": "online", "name": "HATS rig", "homed": ["SX", "SY"] } },
-  "config": { "path": "/app/mcc/room.json", "error": null } }
+  "config": { "path": "/app/mcc/room.json", "error": null },
+  "simulation": false }
 ```
 
+- `ready: false`：那一軸還沒接 Pi 或還沒在實機確認（`room.json`），不會真的動
 - `known: false`：那一軸自 Arduino 上次開機後還沒歸位，位置未知（`value` 是 `room.json` 的 `default`，只給 3D 畫面用）
 - `estimated: true`：正在移動中（依標稱速度推算）或位置未知
 
@@ -775,7 +870,9 @@ python -m pytest
 
 不需要 Pi 或 Beszel hub：涵蓋裝置清單 upsert、逾時決定方式、Pi 的 busy / 409 對應、指令表轉發、健康歷史資料轉換、
 容器清單、停車位置、告警觸發 / 解除 / webhook、API token；
-3D 房間：軸對應表驗證、setup 的移動順序、未歸位先歸位、Arduino 重開後重新歸位、失敗與停止、送出前的檢查。
+3D 房間：軸對應表驗證（含未接線 / 未確認的軸）、setup 的移動順序、未歸位先歸位、Arduino 重開後重新歸位、失敗與停止、送出前的檢查；
+ACQUA 移動作業 API：韌體數值翻譯、順序、各種拒絕（400 / 503 / 404）、超出行程算 error、`TM` 警告；
+模擬模式：等待網頁確認、done / failed / 停止、假裝位置不混進真實狀態。
 Pi 端的序列埠協定測試在 Pi 專案裡。
 
 ---

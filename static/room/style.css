@@ -161,6 +161,7 @@ button:disabled:hover { border-color: var(--border); background: #0d1116; }
   font-size: 10px; color: var(--warn); margin-top: 4px; line-height: 1.5;
 }
 .ctl .tgt b { color: var(--fg); }
+.ctl.locked { opacity: .45; }
 .ctl.moving { position: relative; }
 .ctl.moving .row .name { color: var(--accent); }
 .ctl.moving::before {
