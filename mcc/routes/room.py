@@ -8,8 +8,9 @@ The 3D room and setups.
   POST /api/room/move              move one axis: {"axis", "target"}
   GET  /api/room/jobs[/<id>]       setup jobs (poll one until state is done / error / aborted)
   POST /api/room/stop              stop the running job after the axis moving now
-  GET  /api/room/simulation        simulation on / off, and the job waiting to be marked done
-  POST /api/room/simulation        {"on": true | false}
+  GET  /api/room/current           the newest job (running or finished) + simulation settings
+  GET  /api/room/simulation        simulation settings, and the manual job waiting to be marked done
+  POST /api/room/simulation        any of {"on": bool, "mode": "auto" | "manual", "speed": 1 … 100}
   POST /api/room/jobs/<id>/finish  simulation only: {"result": "done"} or {"result": "error", "error"}
   /api/room/setups[/<id>]          saved setups: list / create, read / update / delete
 
@@ -104,16 +105,22 @@ def room_stop(job_id=None):
 
 @bp.route('/api/room/simulation', methods=['GET', 'POST'])
 def room_simulation():
-    """With simulation on, jobs move nothing and wait for the web page to mark them done."""
+    """With simulation on, jobs send nothing to the Pis (see mcc/room/__init__.py)."""
     if request.method == 'POST':
         data = json_object()
-        if data is None or not isinstance(data.get('on'), bool):
-            return fail('Send {"on": true} or {"on": false}', 400)
+        if data is None:
+            return fail(*BAD_JSON)
         try:
-            services.room.set_simulation(data['on'])
+            services.room.set_simulation(data.get('on'), data.get('mode'), data.get('speed'))
         except RoomError as e:
             return fail(str(e), e.http_status)
-    return ok(on=services.room.sim.on, job=services.room.waiting_job())
+    return ok(**services.room.sim.settings(), job=services.room.waiting_job())
+
+
+@bp.get('/api/room/current')
+def room_current():
+    """What the job window on every page polls: small, and no Pi is asked anything."""
+    return ok(job=services.room.current(), simulation=services.room.sim.settings())
 
 
 @bp.post('/api/room/jobs/<job_id>/finish')

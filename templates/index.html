@@ -14,6 +14,7 @@
     <button class="navb on" data-action="view" data-view="devices" id="nav-devices" title="Devices and controls">▦</button>
     <button class="navb" data-action="view" data-view="monitoring" id="nav-monitoring" title="Monitoring: health of every Pi">◔<span class="nbadge" id="nav-alerts" hidden></span></button>
     <a class="navb" href="/room" title="3D room: setups and live positions">⬚</a>
+    <button class="navb" data-action="view" data-view="scripts" id="nav-scripts" title="Test scripts: try everything without Pis">▷</button>
     <button class="navb" data-action="open-monitoring" title="Set up monitoring agents on the Pis">⚙</button>
     <div class="sp"></div>
     <div class="st" id="nav-dot" title="Server connection"></div>
@@ -30,6 +31,20 @@
         <button data-action="open-monitoring">Set up agents</button>
       </div>
       <div class="grow" id="mon-body-view"><div class="empty">Loading…</div></div>
+    </div>
+  </div>
+
+  <!-- Test scripts view (rendered by scripts.js) -->
+  <div class="work single" id="scr-view" hidden>
+    <div class="panel">
+      <div class="top">
+        <h1>Test scripts</h1>
+        <span class="n">Each one plays ACQUA against this control center, in simulation: no Pi needed</span>
+        <span class="sp"></span>
+        <label class="scr-speed" for="scr-speed">Speed
+          <select id="scr-speed" title="How much faster than the real rig the simulated moves run"></select></label>
+      </div>
+      <div class="grow scr" id="scr-body"><div class="empty">Loading…</div></div>
     </div>
   </div>
 
@@ -191,9 +206,9 @@
 <div id="toasts"></div>
 
 <!-- Plain scripts sharing one global scope, in dependency order (see the header of core.js) -->
-{% for name in ['core', 'devices', 'health', 'charts', 'monitoring', 'park', 'main'] %}
+{% for name in ['core', 'devices', 'health', 'charts', 'monitoring', 'park', 'scripts', 'main'] %}
 <script src="{{ url_for('static', filename='js/' ~ name ~ '.js') }}?v={{ v }}"></script>
 {% endfor %}
-<script src="{{ url_for('static', filename='sim.js') }}?v={{ v }}" data-theme="light" data-place="bottom"></script>
+<script src="{{ url_for('static', filename='motion.js') }}?v={{ v }}" data-theme="light" data-place="bottom"></script>
 </body>
 </html>

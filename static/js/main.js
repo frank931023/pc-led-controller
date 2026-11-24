@@ -2,6 +2,24 @@
 
 // Refresh loop, event wiring and start-up. Loaded last: everything it calls is defined.
 
+// ===== Views (the sidebar buttons) =====
+
+const VIEWS = {
+  devices: { el: '#dev-view', nav: '#nav-devices', open: () => {} },
+  monitoring: { el: '#mon-view', nav: '#nav-monitoring', open: () => { renderMonitoring(); loadAlertState(); } },
+  scripts: { el: '#scr-view', nav: '#nav-scripts', open: () => (scripts.loaded ? pollRun() : loadScripts()) },
+};
+
+function setView(view) {
+  state.view = VIEWS[view] ? view : 'devices';
+  try { localStorage.setItem(VIEW_KEY, state.view); } catch { /* fine */ }
+  for (const [name, v] of Object.entries(VIEWS)) {
+    $(v.el).hidden = name !== state.view;
+    $(v.nav).classList.toggle('on', name === state.view);
+  }
+  VIEWS[state.view].open();
+}
+
 // ===== Actions =====
 
 async function refresh() {
@@ -132,6 +150,8 @@ document.addEventListener('click', (e) => {
     case 'park-device': parkDevice(state.selected); break;
     case 'close-charts': closeCharts(); break;
     case 'chart-range': setChartRange(el.dataset.range); break;
+    case 'run-script': runScript(el.dataset.id); break;
+    case 'stop-script': stopScript(); break;
   }
 });
 
@@ -174,10 +194,11 @@ document.addEventListener('visibilitychange', () => { if (!document.hidden) refr
 
 let savedView = 'devices';
 try { savedView = localStorage.getItem(VIEW_KEY) || 'devices'; } catch { /* fine */ }
-// Deep links: #health = Monitoring page, #device=<id> = that device's panel.
+// Deep links: #health = Monitoring page, #scripts = Test scripts, #device=<id> = that device's panel.
 const linkedDevice = location.hash.startsWith('#device=') ? decodeURIComponent(location.hash.slice(8)) : null;
 if (linkedDevice) state.selected = linkedDevice;
-setView(location.hash === '#health' ? 'monitoring' : linkedDevice ? 'devices' : savedView);
+const HASH_VIEWS = { '#health': 'monitoring', '#scripts': 'scripts' };
+setView(HASH_VIEWS[location.hash] || (linkedDevice ? 'devices' : savedView));
 refresh();
 if (location.hash === '#monitoring') openMonitoring();   // shareable link to the setup steps
 setInterval(() => { if (!document.hidden) refresh(); }, POLL_MS);

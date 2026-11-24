@@ -1,95 +1,19 @@
 """
-Tests for the room: axis table, setup jobs, homing after an Arduino restart.
-No Pi needed: pi_client.send_command is replaced by a scripted fake.
+Tests for the room: axis table, setup jobs on the real rig, homing after an Arduino
+restart, saved setups and overlays. No Pi needed: pi_client.send_command is replaced by
+a scripted fake (conftest.py). The motion API, simulation and scripts have their own files.
 """
 import json
+import os
 import time
 
 import pytest
 
-import app as entry
+from helpers import apply, finished, motion, simulate
 from mcc import pi_client, services
-from mcc.devices import DeviceStore
-from mcc.monitor import StatusMonitor
-from mcc.room import Axis, Room, RoomConfig, RoomConfigError, RoomState, firmware_failure, parse_axes
+from mcc.room import Axis, RoomConfig, RoomConfigError, RoomState, firmware_failure, parse_axes
+from conftest import AXES
 from mcc.setups import SetupStore, clean_overlays
-
-AXES = {'axes': [
-    {'id': 'a.lift', 'device': 'pi-01', 'ch': 'SY', 'min': 0.5, 'max': 1.5, 'unit': 'm', 'speed': 10, 'verified': True},
-    {'id': 'a.x', 'device': 'pi-01', 'ch': 'SX', 'min': -1.0, 'max': 1.0, 'unit': 'm', 'speed': 10, 'verified': True},
-    {'id': 'a.tilt', 'device': 'pi-01', 'ch': 'T', 'min': -15, 'max': 35, 'unit': 'deg', 'speed': 100, 'verified': True},
-    {'id': 'b.z', 'device': 'pi-02', 'ch': 'SZ', 'min': 0.0, 'max': 2.0, 'unit': 'm', 'speed': 10, 'verified': True},
-    # planned but not checked on the rig yet, and not wired at all
-    {'id': 'b.lift', 'device': 'pi-02', 'ch': 'SY', 'min': 0.0, 'max': 1.0, 'unit': 'm', 'speed': 10},
-    {'id': 'c.x', 'device': None, 'ch': None, 'min': 0.0, 'max': 1.0, 'unit': 'm', 'speed': 10},
-]}
-
-
-class FakePis:
-    """Answers like the Pi: DONE, plus the Arduino session of each device."""
-
-    def __init__(self):
-        self.sent = []                       # (device, command)
-        self.session = {'pi-01': 's1', 'pi-02': 's1'}
-        self.extra = {}                      # command -> extra response lines
-        self.restart_on = None               # command that makes the Arduino restart
-
-    def send(self, device, command, timeout):
-        device_id = device['name']
-        self.sent.append((device_id, command))
-        if command == self.restart_on:
-            self.session[device_id] += 'r'
-            self.restart_on = None
-        lines = self.extra.get(command, []) + ['DONE']
-        return {'arduino_result': 'DONE', 'arduino_response': lines,
-                'arduino_session': self.session[device_id]}
-
-    def commands(self, device_id=None):
-        return [c for d, c in self.sent if device_id in (None, d)]
-
-
-@pytest.fixture
-def rig(monkeypatch, tmp_path):
-    (tmp_path / 'room.json').write_text(json.dumps(AXES), encoding='utf-8')
-    store = DeviceStore(str(tmp_path / 'pi_config.json'), {})
-    for device_id in ('pi-01', 'pi-02'):
-        store.upsert(device_id, {'host': f'{device_id}.test', 'port': 5000, 'name': device_id})
-    monitor = StatusMonitor(store)
-    monkeypatch.setattr(monitor, 'start', lambda: None)
-    monkeypatch.setattr(monitor, 'check_soon', lambda device_id: None)
-    for device_id in ('pi-01', 'pi-02'):
-        monitor.set(device_id, pi_client.ONLINE)
-    fake = FakePis()
-    monkeypatch.setattr(monitor, 'info', lambda d: {'arduino_session': fake.session.get(d), 'command_timeout': 30})
-    monkeypatch.setattr(pi_client, 'send_command', fake.send)
-    monkeypatch.setattr(services, 'store', store)
-    monkeypatch.setattr(services, 'monitor', monitor)
-    monkeypatch.setattr(services, 'room', Room(RoomConfig([str(tmp_path / 'room.json')]),
-                                               RoomState(str(tmp_path / 'room_state.json'))))
-    library = tmp_path / 'library'
-    library.mkdir()
-    (library / 'ex-01.json').write_text(json.dumps({'id': 'ex-01', 'name': 'Example', 'group': 'Demo',
-                                                     'axes': {'a.lift': 0.8}}), encoding='utf-8')
-    monkeypatch.setattr(services, 'setups', SetupStore(str(tmp_path / 'setups'), str(library)))
-    monkeypatch.setattr(services.settings, 'api_token', '')
-    entry.app.config['TESTING'] = True
-    fake.client = entry.app.test_client()
-    fake.tmp = tmp_path
-    return fake
-
-
-def apply(rig, axes, name='test'):
-    return rig.client.post('/api/room/apply', json={'name': name, 'axes': axes})
-
-
-def finished(rig, job_id, timeout=5):
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        job = rig.client.get(f'/api/room/jobs/{job_id}').get_json()['job']
-        if job['state'] not in ('running', 'aborting'):
-            return job
-        time.sleep(0.01)
-    raise AssertionError('job did not finish')
 
 
 # ----- axis table -----
@@ -135,7 +59,6 @@ def test_broken_edit_keeps_the_last_good_table(tmp_path):
     config = RoomConfig([str(path)])
     assert len(config.axes()) == 6
     path.write_text('{ broken', encoding='utf-8')
-    import os
     os.utime(path, (time.time() + 5, time.time() + 5))
     assert len(config.axes()) == 6 and config.info()['error']
 
@@ -345,120 +268,6 @@ def test_bundled_teams_examples_are_valid():
         assert clean_overlays(s['overlays']) == s['overlays'], s['id']        # stored already clean
 
 
-# ----- ACQUA motion API (/api/motion/jobs) -----
-
-def motion(rig, targets, label='location2'):
-    return rig.client.post('/api/motion/jobs', json={'label': label, 'targets': targets})
-
-
-def motion_finished(rig, job_id, timeout=5):
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        job = rig.client.get(f'/api/motion/jobs/{job_id}').get_json()['job']
-        if job['state'] not in ('queued', 'running'):
-            return job
-        time.sleep(0.01)
-    raise AssertionError('motion job did not finish')
-
-
-def test_motion_job_runs_firmware_targets_in_axis_table_order(rig):
-    # sent in "wrong" order: the axis table decides (a.lift, a.x, then pi-02)
-    resp = motion(rig, {'pi-02': {'SZM': 1500}, 'pi-01': {'SXM': 1250, 'SYM': 450}})
-    assert resp.status_code == 202
-    job = motion_finished(rig, resp.get_json()['job_id'])
-    assert job['state'] == 'done' and job['error'] is None and job['label'] == 'location2'
-    assert rig.commands() == ['SYH', 'SYM,450', 'SXH', 'SXM,1250', 'SZH', 'SZM,1500']
-    assert job['positions'] == {'pi-01': {'SYM': 450, 'SXM': 1250}, 'pi-02': {'SZM': 1500}}
-    # same setup again: already there, nothing sent, still "done"
-    again = motion_finished(rig, motion(rig, {'pi-01': {'SYM': 450}}).get_json()['job_id'])
-    assert again['state'] == 'done' and again['progress']['unchanged'] == 1 and len(rig.sent) == 6
-
-
-@pytest.mark.parametrize('targets, message', [
-    ({'pi-09': {'SZM': 1}}, 'pi-09: no such device'),
-    ({'pi-01': {'XYZ': 1}}, 'unknown command XYZ'),
-    ({'pi-01': {'SZM': 1}}, 'nothing is wired to pi-01 SZ'),
-    ({'pi-01': {'SYM': 'high'}}, 'not a number'),
-    ({'pi-01': {'SYM': 1001}}, 'outside its travel 0 … 1000 mm'),
-    ({'pi-01': {}}, 'no commands'),
-    ({}, 'non-empty'),
-])
-def test_motion_job_refused_with_one_readable_error(rig, targets, message):
-    resp = motion(rig, targets)
-    assert resp.status_code == 400 and message in resp.get_json()['error']
-    assert rig.sent == []
-
-
-def test_motion_job_exceeded_travel_is_an_error_not_done(rig):
-    rig.extra['SYM,450'] = ['Exceeded Max travel.']
-    job = motion_finished(rig, motion(rig, {'pi-01': {'SYM': 450}}).get_json()['job_id'])
-    assert job['state'] == 'error' and job['error'].startswith('pi-01 ')
-    assert 'SYM,450' in job['error'] and 'calibrated travel' in job['error']
-    assert 'SYM' not in job['positions'].get('pi-01', {})
-
-
-def test_motion_job_offline_is_503_and_unknown_job_is_404(rig):
-    services.monitor.set('pi-02', pi_client.OFFLINE)
-    resp = motion(rig, {'pi-02': {'SZM': 100}})
-    assert resp.status_code == 503 and 'pi-02 is offline' in resp.get_json()['error']
-    assert rig.client.get('/api/motion/jobs/nope').status_code == 404
-
-
-def test_motion_job_with_tilt_warns(rig):
-    job = motion_finished(rig, motion(rig, {'pi-01': {'TM': 10}}).get_json()['job_id'])
-    assert job['state'] == 'done' and 'TM' in job['warnings'][0]
-
-
-# ----- simulation (no Pis) -----
-
-def test_simulated_job_waits_for_the_page_then_reports_done(rig):
-    rig.client.post('/api/room/simulation', json={'on': True})
-    services.monitor.set('pi-02', pi_client.OFFLINE)          # no Pis needed
-    job_id = motion(rig, {'pi-01': {'SYM': 450}, 'pi-02': {'SZM': 1500}}).get_json()['job_id']
-    time.sleep(0.05)
-    view = rig.client.get(f'/api/motion/jobs/{job_id}').get_json()['job']
-    assert view['state'] == 'running' and view['simulated']
-    waiting = rig.client.get('/api/room/simulation').get_json()
-    assert waiting['on'] and waiting['job']['id'] == job_id
-    assert rig.client.post('/api/room/simulation', json={'on': False}).status_code == 409
-    assert rig.client.post('/api/pi/pi-01/command', json={'command': 'SXH'}).status_code == 409
-
-    assert rig.client.post(f'/api/room/jobs/{job_id}/finish', json={'result': 'done'}).status_code == 200
-    view = rig.client.get(f'/api/motion/jobs/{job_id}').get_json()['job']
-    assert view['state'] == 'done' and view['positions'] == {'pi-01': {'SYM': 450}, 'pi-02': {'SZM': 1500}}
-    assert rig.sent == []                                         # nothing went to a Pi
-    live = rig.client.get('/api/room/live').get_json()
-    assert live['simulation'] and live['axes']['b.z'] == {'value': 1.5, 'estimated': False,
-                                                         'known': True, 'homed': True, 'ready': True}
-    assert rig.client.get('/api/room/simulation').get_json()['job'] is None
-    # pretend positions never leak into the real state
-    rig.client.post('/api/room/simulation', json={'on': False})
-    assert rig.client.get('/api/room/live').get_json()['axes']['b.z']['known'] is False
-
-
-def test_simulated_job_can_fail_or_be_stopped(rig):
-    rig.client.post('/api/room/simulation', json={'on': True})
-    job_id = motion(rig, {'pi-01': {'SYM': 450}}).get_json()['job_id']
-    resp = rig.client.post(f'/api/room/jobs/{job_id}/finish', json={'result': 'error', 'error': 'Jammed'})
-    view = rig.client.get(f'/api/motion/jobs/{job_id}').get_json()['job']
-    assert resp.status_code == 200 and view['state'] == 'error' and 'Jammed' in view['error']
-    assert rig.client.post(f'/api/room/jobs/{job_id}/finish', json={'result': 'done'}).status_code == 409
-
-    job_id = motion(rig, {'pi-01': {'SYM': 450}}).get_json()['job_id']
-    assert rig.client.post('/api/room/stop').status_code == 200
-    view = rig.client.get(f'/api/motion/jobs/{job_id}').get_json()['job']
-    assert view['state'] == 'aborted' and view['error']
-
-
-def test_simulation_is_remembered(tmp_path):
-    from mcc.room import Simulation
-    sim = Simulation(str(tmp_path / 'simulation.json'))
-    sim.set(True)
-    sim.arrive({'a.lift': 1.2})
-    again = Simulation(str(tmp_path / 'simulation.json'))
-    assert again.on and again.position('a.lift') == 1.2
-
-
 # ----- wiring not filled in / not verified yet -----
 
 def test_unverified_or_unwired_axes_never_move_for_real(rig):
@@ -476,7 +285,7 @@ def test_unverified_or_unwired_axes_never_move_for_real(rig):
 
 
 def test_unverified_and_unwired_axes_work_in_simulation(rig):
-    rig.client.post('/api/room/simulation', json={'on': True})
+    simulate(rig, mode='manual')
     job = apply(rig, {'b.lift': 0.5, 'c.x': 0.5}).get_json()['job']
     assert [s['command'] for s in job['steps']] == ['SYM,500', '(not wired: 500)']
     assert job['devices'] == ['pi-02']

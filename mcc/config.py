@@ -16,7 +16,7 @@ class Settings:
     room_file: str
     room_state_file: str
     setups_dir: str
-    # Simulation switch + pretend positions (data/simulation.json), see mcc/room.py.
+    # Simulation switch + pretend positions (data/simulation.json), see mcc/room/state.py.
     simulation_file: str
 
     # Seconds a single command may take. Each Pi reports its own COMMAND_TIMEOUT and

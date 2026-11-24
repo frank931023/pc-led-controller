@@ -12,7 +12,9 @@ Package layout:
   beszel.py      Pi health from the Beszel hub + two-way sync of the device list
   alerts.py      health alert rules, active alerts, webhook notifications
   dispatch.py    running one firmware command (shared by the command API and setup jobs)
-  room.py        axis table, homed state / positions, setup jobs (one axis at a time)
+  room/          axis table, homed state / positions, setup jobs (one axis at a time),
+                 simulation (no Pis needed)
+  scripts/       test scripts that play ACQUA against this control center (Scripts page)
   room.json      the bundled axis table (data/room.json overrides it)
   setups.py      saved setups (data/setups/) and bundled examples (setup_library/)
   storage.py     atomic JSON writes for the files in data/

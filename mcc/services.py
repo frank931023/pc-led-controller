@@ -10,6 +10,7 @@ from .beszel import BeszelClient, BeszelSync
 from .devices import DeviceStore
 from .monitor import StatusMonitor
 from .room import Room, RoomConfig, RoomState, Simulation
+from .scripts import SCRIPTS, ScriptRunner
 from .setups import SetupStore
 
 # The axis table that ships with the code; data/room.json (settings.room_file) overrides it.
@@ -24,10 +25,11 @@ health = None       # beszel.BeszelSync     — health data + two-way sync with 
 alerts = None       # alerts.AlertEngine    — alert rules and active alerts
 room = None         # room.Room             — axis table, homed state, setup jobs
 setups = None       # setups.SetupStore     — saved setups (data/setups/)
+scripts = None      # scripts.ScriptRunner  — test scripts (Scripts page)
 
 
 def init(app_settings):
-    global settings, store, monitor, health, alerts, room, setups
+    global settings, store, monitor, health, alerts, room, setups, scripts
     settings = app_settings
     # Start empty: devices come from the web UI or from the deploy tool (PUT /api/pi/<id>).
     store = DeviceStore(settings.config_file, {})
@@ -38,3 +40,4 @@ def init(app_settings):
     room = Room(RoomConfig([settings.room_file, BUNDLED_ROOM]), RoomState(settings.room_state_file),
                 Simulation(settings.simulation_file))
     setups = SetupStore(settings.setups_dir, SETUP_LIBRARY)
+    scripts = ScriptRunner(SCRIPTS)

@@ -6,19 +6,6 @@
 
 const VIEW_KEY = 'mcc-view';
 
-function setView(view) {
-  state.view = view === 'monitoring' ? 'monitoring' : 'devices';
-  try { localStorage.setItem(VIEW_KEY, state.view); } catch { /* fine */ }
-  $('#dev-view').hidden = state.view !== 'devices';
-  $('#mon-view').hidden = state.view !== 'monitoring';
-  $('#nav-devices').classList.toggle('on', state.view === 'devices');
-  $('#nav-monitoring').classList.toggle('on', state.view === 'monitoring');
-  if (state.view === 'monitoring') {
-    renderMonitoring();
-    loadAlertState();
-  }
-}
-
 /** Red counter on the Monitoring icon + per-device alerts, from GET /api/pis. */
 function renderAlertBadge() {
   const n = state.alerts.length;

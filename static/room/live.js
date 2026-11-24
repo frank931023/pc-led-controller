@@ -151,8 +151,8 @@ export function createLive({ controls, applyToScene, statusHost }) {
       }).join('')}</div>`);
       const bad = devs.filter(([, d]) => d.status !== 'online');
       if (snap.simulation) {
-        parts.push(`<div class="lvnote">Simulation is on: nothing is sent to the Pis. Each setup waits
-          for you to mark it done in the window that pops up.</div>`);
+        parts.push(`<div class="lvnote">Simulation is on: nothing is sent to the Pis. The chip at the
+          top shows how setups run (automatic or waiting for you) and changes it.</div>`);
       } else if (bad.length) {
         parts.push(`<div class="lvnote">${bad.length} of ${devs.length} devices are not online:
           their axes cannot move. See the Devices page for why.</div>`);
@@ -178,7 +178,7 @@ export function createLive({ controls, applyToScene, statusHost }) {
       const pct = Math.round((job.index / Math.max(1, job.steps.length)) * 100);
       parts.push(`<div class="lv job">
         <b>${job.state === 'aborting' ? 'Finishing the current axis' : esc(job.name)}</b>
-        <div class="sub">${job.simulated ? 'Simulated: waiting for “Mark as done”' : step ? `${STEP_TEXT[step.state] || 'Waiting'}: ${esc(step.label)}
+        <div class="sub">${job.mode === 'manual' ? 'Simulated: waiting for “Mark as done” in the job window' : step ? `${STEP_TEXT[step.state] || 'Waiting'}: ${esc(step.label)}
           ${fmt.by(step.unit)(step.from)} → ${fmt.by(step.unit)(step.to)}` : ''}</div>
         <div class="pb"><i style="width:${pct}%"></i></div>
         <div class="sub">${job.steps.length > 1 ? `Axis ${job.index + 1} of ${job.steps.length} · ` : ''}

@@ -49,6 +49,7 @@
     <a class="navb" href="/" title="Devices and controls">▦</a>
     <a class="navb" href="/#health" title="Monitoring: health of every Pi">◔</a>
     <a class="navb on" href="/room" title="3D room: setups and live positions">⬚</a>
+    <a class="navb" href="/#scripts" title="Test scripts: try everything without Pis">▷</a>
   </nav>
   <div id="app">
     <div id="viewport">
@@ -76,7 +77,7 @@
       '\n\nThis page loads three.js from unpkg.com, so the browser needs internet access.';
   }
 </script>
-<script src="{{ url_for('static', filename='sim.js') }}?v={{ v }}" data-theme="dark" data-place="top"></script>
+<script src="{{ url_for('static', filename='motion.js') }}?v={{ v }}" data-theme="dark" data-place="top"></script>
 <script type="module" src="{{ url_for('static', filename='room/main.js') }}?v={{ v }}"></script>
 </body>
 </html>

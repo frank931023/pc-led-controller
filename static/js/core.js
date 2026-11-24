@@ -10,7 +10,8 @@
  *   charts.js      health history charts
  *   monitoring.js  Monitoring page, containers, alert rules
  *   park.js        parking position, "Home & park", "Home all devices"
- *   main.js        refresh loop, the one delegated event handler, start-up
+ *   scripts.js     Test scripts page: run a script, follow its log
+ *   main.js        views, refresh loop, the one delegated event handler, start-up
  * They share one global scope; only main.js runs code at load time.
  *
  * Non-blocking rules all of them follow:
@@ -52,7 +53,7 @@ const state = {
   charts: null,       // { id, data, timer } while the health history dialog is open
   chartRange: '1h',   // last range picked in that dialog
   refreshing: false,
-  view: 'devices',    // 'devices' | 'monitoring'
+  view: 'devices',    // 'devices' | 'monitoring' | 'scripts' (see VIEWS in main.js)
   alerts: [],         // active alerts, from /api/pis
   alertRules: null,   // from /api/alerts (bar colours follow the thresholds)
   alertEvents: [],    // recent fired / resolved, from /api/alerts

@@ -50,8 +50,16 @@ mcc/                    應用程式本體
   config.py               所有環境變數設定（.env）集中在這裡
   services.py             所有路由共用的長駐物件（裝置清單、狀態監控、健康同步、告警、3D 房間）
   dispatch.py             送一個韌體指令（指令 API 和 setup 工作共用：同一把鎖、同樣更新歸位狀態）
-  room.py                 3D 房間：軸對應表、歸位 / 位置狀態、setup 工作（一次一軸）、模擬模式
+  room/                   3D 房間與 setup 工作
+    axes.py                 軸對應表（RoomConfig）、單位換算、韌體回應判斷
+    state.py                歸位 / 位置狀態（RoomState）、模擬設定與假裝位置（Simulation）
+    jobs.py                 setup 工作（Room）：送出前全部檢查、一次一軸、停止、模擬的手動回報
+    runners.py              一軸怎麼走：實機（RigRunner）或模擬（SimulatedRunner）
   room.json               內建的軸對應表（data/room.json 存在時以它為準）
+  scripts/                測試腳本（沒有 Pi 也能測整條 ACQUA → 控制中心）
+    runner.py               一次跑一個、記錄 log、可停止；跑完把模擬設定還原
+    acqua.py                假的 ACQUA：照 ACQUA 的 HttpCrane 送 POST、每秒輪詢
+    catalog.py              腳本本身（一個函式一個，用 @script 註冊）
   setups.py               存好的 setup（data/setups/）與內建範例（setup_library/），含 overlays
   setup_library/          內建範例 setup（唯讀）：MS Teams V5 的 14 個 test setup
   devices.py              裝置清單 data/pi_config.json（偵測手動修改、壞檔保護、停車位置）
@@ -69,10 +77,11 @@ mcc/                    應用程式本體
     alerts.py               告警規則與 webhook 測試
     room.py                 3D 房間頁、套用 setup、工作進度、存好的 setup、模擬開關
     motion.py               給 ACQUA 的移動作業 API（/api/motion/jobs）：韌體數值 → 軸 → 同一個 setup 工作
+    scripts.py              測試腳本 API（/api/scripts）
 templates/index.html    頁面骨架與對話框
 templates/room.html     3D 房間頁（three.js 從 CDN 載入，不需要 build）
 static/style.css        樣式（沿用 ACQUA-Automation 的設計：主色 #009B85 + 白），依區塊分段
-static/sim.js           模擬模式的浮動按鈕與「setup 等待確認」視窗（儀表板和 3D 房間都有）
+static/motion.js        工作視窗（每一頁都有）：setup 進度、可縮小；模擬設定
 static/js/              前端，依功能分檔、照順序載入、不需要 build
   core.js                 設定、共用狀態、api()、API token、通知、確認視窗
   devices.js              Devices 頁：裝置清單、控制面板、指令紀錄、新增 / 改名 / 移除
@@ -80,6 +89,7 @@ static/js/              前端，依功能分檔、照順序載入、不需要 b
   charts.js               健康歷史圖表
   monitoring.js           Monitoring 頁、容器清單、告警規則
   park.js                 停車位置、Home & park、Home all devices
+  scripts.js              Test scripts 頁：執行腳本、看即時 log
   main.js                 定時刷新、事件處理、啟動
 static/room/            3D 房間（從 ACQUA Automation 的 soundproofroom 移植，ES module）
   spec.js / look.js / config.js / builders.js / interaction.js   場景（尺寸、外觀、物件、拖曳），與 ACQUA 相同
@@ -242,17 +252,49 @@ python app.py
 改法：複製到 `data/room.json` 再改（存檔就生效，不用重建 image）；JSON 寫壞時會沿用上一版並在 3D 房間顯示錯誤。
 ⚠️ ACQUA 是用「Pi + 指令」送目標的，所以 `device` / `ch` 改了之後，ACQUA 的 `acqua/crane.py` 也要改成一樣。
 
+#### 工作視窗（ACQUA 送擺位時跳出來）
+
+每一頁（儀表板、3D 房間）都有。有 setup 工作時：
+
+- **自動跳出**：ACQUA 或測試腳本送來的工作會跳出視窗，顯示進度條、每一軸的狀態
+  （✓ 完成、▶ 移動中、⌂ 先歸位、– 跳過、✗ 失敗）、已經過幾秒、大約還要多久
+- **縮小（Minimize）不會停止任何東西**：工作在伺服器上跑，網頁可以照常操作；
+  縮小後變成底部（3D 房間在上方）的小卡片，持續更新進度，點它再打開。按 Esc 或點背景也是縮小
+- 縮小過一次之後，**之後的工作也維持縮小**（連續送 14 個擺位不會一直跳），直到你再打開
+- **Stop after this axis**：正在動的那一軸會走完（韌體沒有停止指令），後面的跳過
+- 結束後顯示結果（✓ Done / ✗ 原因 / ■ Stopped）。3D 房間自己按的移動不會跳出（面板上已經有進度）
+
 #### 模擬模式（還沒有 Pi 的時候）
 
-頁面底部（3D 房間在上方）有一顆 **Simulation off** 按鈕，按下去可以開啟模擬。開啟後：
+點底部的 **Simulation off** 小按鈕打開設定：
 
-- setup 工作（ACQUA 送來的，或 3D 房間按 Apply）**不送任何指令給 Pi**，也不檢查 Pi 在不在線
-- 網頁會**跳出視窗**，列出這個擺位會動哪些軸、送什麼指令（例如 `SZM,3350`）
-  - **✓ Mark as done**：當作全部到位，ACQUA 輪詢會拿到 `state: "done"` 和 `positions`，3D 房間的物件會移過去
-  - **Mark as failed…**：填原因，ACQUA 拿到 `state: "error"` 和這段文字
-  - **Later**：先關掉視窗，浮動按鈕會變成「setup waiting」，按它可以再打開
+| 設定 | 作用 |
+|---|---|
+| **Simulation on** | setup 工作（ACQUA、3D 房間、測試腳本）**不送任何指令給 Pi**，也不檢查 Pi 在不在線 |
+| **Automatic** | 工作自己一軸一軸跑完（看得到進度、3D 物件會動），然後回報 done。**Speed** 1× ~ 100× 是比真機快幾倍 |
+| **Manual** | 工作停在視窗裡等你按 **✓ Mark as done** 或 **Mark as failed…**（填原因）；ACQUA 拿到的就是你的回答 |
+
 - 模擬的位置另外存在 `data/simulation.json`，**不會混進真實的歸位 / 位置狀態**；關掉模擬就回到真實狀態
-- 有工作在跑的時候不能切換模擬（先完成或停止）。接上真的 Pi 前記得關掉
+- 有工作在跑的時候不能開關模擬（模式和速度可以改）。接上真的 Pi 前記得關掉
+
+#### 測試腳本（左側欄 ▷）
+
+沒有 Pi 也能把「ACQUA → 控制中心」整條路跑一遍。每個腳本都扮演 ACQUA：照 ACQUA 的格式
+`POST /api/motion/jobs`、每秒輪詢，並檢查 ACQUA 會依賴的結果。跑的時候自動開模擬，跑完把模擬設定還原。
+
+| 腳本 | 測什麼 |
+|---|---|
+| ACQUA sends one setup | 送一個擺位（第一個 Teams 範例），等到 done，回報的位置 = 送出的目標 |
+| Every example setup, one after another | 14 個 Teams 範例依序送，前一個 done 才送下一個 |
+| The same setup twice | 第二次全部已到位：馬上 done、一軸都不動 |
+| A move fails halfway | 第 2 軸回「Exceeded Max travel.」：ACQUA 拿到 error 和看得懂的原因、後面的軸跳過、失敗的軸不算到位 |
+| Stop a setup halfway | 第 2 軸移動中按停止：那一軸走完、後面跳過、ACQUA 看到 aborted |
+| A second setup while one is still moving | 第一個還在跑時再送：回 409，第一個不受影響 |
+| Bad requests are refused | 不存在的 Pi、不認得的指令、行程 ±1 的邊界、文字數字、true、空的、不是 JSON：全部 400 且沒有工作開始 |
+| Both ends of the travel | 行程的兩端（0 mm 和最遠）都接受、都到得了 |
+| Wait for you: Mark as done | 手動模式：視窗跳出等你按（標 **needs you**） |
+
+右邊顯示即時 log（✓ 通過、✗ 失敗、每次輪詢的進度），上方可選速度。一次只能跑一個；有真的 setup 在動時不能跑。
 
 #### 示意圓、標記點、距離
 
@@ -542,8 +584,13 @@ python app.py
 | `POST` | `/api/room/move` | 移動單一軸（同樣是 job） |
 | `GET` | `/api/room/jobs` / `/api/room/jobs/<id>` | setup 工作進度（輪詢到結束） |
 | `POST` | `/api/room/stop` | 停止目前的 setup（正在動的那一軸會走完） |
-| `GET`/`POST` | `/api/room/simulation` | 模擬模式：查詢（含等待確認的工作）/ 開關 `{"on": true}` |
-| `POST` | `/api/room/jobs/<id>/finish` | 模擬模式：回報結果 `{"result": "done"}` 或 `{"result": "error", "error": "原因"}` |
+| `GET` | `/api/room/current` | 最新的工作（進行中或已結束）+ 模擬設定：工作視窗每秒讀它，不會去問任何 Pi |
+| `GET`/`POST` | `/api/room/simulation` | 模擬設定：查詢（含等待手動回報的工作）/ 修改 `{"on": true, "mode": "auto", "speed": 10}`（可只給其中幾項） |
+| `POST` | `/api/room/jobs/<id>/finish` | 模擬手動模式：回報結果 `{"result": "done"}` 或 `{"result": "error", "error": "原因"}` |
+| `GET` | `/api/scripts` | 測試腳本清單 + 最近一次執行 |
+| `POST` | `/api/scripts/<id>/run` | 執行一個腳本 `{"speed": 1 ~ 100}` → `202`；已有腳本在跑或有 setup 在動 → `409` |
+| `GET` | `/api/scripts/runs/<id>` | 一次執行的狀態與 log（`running` / `passed` / `failed` / `stopped` / `error`） |
+| `POST` | `/api/scripts/stop` | 停止正在跑的腳本（它的工作也會停） |
 | `GET`/`POST` | `/api/room/setups` | 存好的 setup：列出 / 新增 |
 | `GET`/`POST`/`DELETE` | `/api/room/setups/<id>` | 讀 / 更新 / 刪除一個 setup |
 
@@ -868,11 +915,16 @@ pip install -r requirements.txt pytest
 python -m pytest
 ```
 
-不需要 Pi 或 Beszel hub：涵蓋裝置清單 upsert、逾時決定方式、Pi 的 busy / 409 對應、指令表轉發、健康歷史資料轉換、
-容器清單、停車位置、告警觸發 / 解除 / webhook、API token；
-3D 房間：軸對應表驗證（含未接線 / 未確認的軸）、setup 的移動順序、未歸位先歸位、Arduino 重開後重新歸位、失敗與停止、送出前的檢查；
-ACQUA 移動作業 API：韌體數值翻譯、順序、各種拒絕（400 / 503 / 404）、超出行程算 error、`TM` 警告；
-模擬模式：等待網頁確認、done / failed / 停止、假裝位置不混進真實狀態。
+不需要 Pi 或 Beszel hub（共用的假 Pi 和小型軸對應表在 `tests/conftest.py`）：
+
+| 檔案 | 內容 |
+|---|---|
+| `test_pc.py` | 裝置清單 upsert、逾時決定方式、Pi 的 busy / 409 對應、指令表轉發、健康歷史、容器、停車位置、告警、API token |
+| `test_room.py` | 軸對應表驗證（含未接線 / 未確認的軸）、移動順序、未歸位先歸位、Arduino 重開後重新歸位、失敗與停止、送出前的檢查、setup 存取、overlays |
+| `test_motion_api.py` | ACQUA 的 API：翻譯與順序、行程兩端與 ±1 的邊界、小數四捨五入、各種壞資料（文字數字、true、null、陣列、NaN、不是 JSON）、401 / 404 / 409 / 503、`ERR`、超出行程、Pi 中途斷線 |
+| `test_simulation.py` | 模擬設定（速度 1 / 100 邊界、0.99、100.01、inf、NaN…）、存檔與壞檔、自動模式（進度、時間依速度縮放、先歸位、停止、在第 1 / 中間 / 最後一軸注入失敗、注入只用一次）、手動模式、各路由 |
+| `test_scripts.py` | 每個腳本都要通過、只能同時跑一個、有 setup 在動時拒絕、停止、還原模擬設定、腳本失敗 / 當掉、log 上限、速度邊界、API token |
+
 Pi 端的序列埠協定測試在 Pi 專案裡。
 
 ---
