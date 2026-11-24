@@ -1,0 +1,47 @@
+{
+  "_about": [
+    "The room's movable axes: which Pi and firmware axis each one is, its travel, and its unit.",
+    "A setup names axes by id (e.g. \"hats.mrp\") with targets in metres / degrees; the control",
+    "center turns them into firmware commands. ORDER MATTERS: a setup moves its axes one at a",
+    "time, in the order they are listed here, so put axes that must clear the way first.",
+    "",
+    "To change the wiring without rebuilding the image, copy this file to data/room.json and",
+    "edit that copy: data/room.json wins when it exists and is reloaded on save.",
+    "",
+    "Fields:",
+    "  id       name used by setups and the 3D room. Renaming it breaks saved setups.",
+    "  device   Device ID in the control center (pi-01 ... pi-07)",
+    "  ch       firmware axis prefix: SX / SY / SZ (rails), R (rotation), T (tilt servo)",
+    "  min/max  travel in room coordinates. For linear axes, firmware 0 mm (the home switch) is min",
+    "  unit     m (sent to the firmware as mm from min) or deg (sent as is)",
+    "  speed    nominal speed in units per second, only for time estimates and the 3D animation",
+    "  default  where the axis is assumed to be before it has been homed (3D view only)"
+  ],
+  "axes": [
+    {"id": "speakers.x",    "device": "pi-01", "ch": "SX", "min": -0.75, "max": 0.75, "unit": "m", "speed": 0.07, "default": 0.0,  "label": "Speaker array — X"},
+    {"id": "speakers.lift", "device": "pi-01", "ch": "SY", "min": 0.80,  "max": 1.80, "unit": "m", "speed": 0.07, "default": 1.30, "label": "Speaker array — height"},
+
+    {"id": "screen.z",      "device": "pi-02", "ch": "SZ", "min": 1.20,  "max": 2.35, "unit": "m", "speed": 0.07, "default": 2.05, "label": "Display — Z"},
+    {"id": "screen.lift",   "device": "pi-02", "ch": "SY", "min": 0.70,  "max": 1.90, "unit": "m", "speed": 0.07, "default": 1.25, "label": "Display — height"},
+
+    {"id": "hats.z",        "device": "pi-03", "ch": "SZ", "min": -1.85, "max": 1.85, "unit": "m", "speed": 0.07, "default": -0.30, "label": "HATS — Z (lower rail)"},
+    {"id": "hats.x",        "device": "pi-03", "ch": "SX", "min": -0.55, "max": 0.55, "unit": "m", "speed": 0.07, "default": 0.0,  "label": "HATS — X (upper rail)"},
+    {"id": "hats.mrp",      "device": "pi-03", "ch": "SY", "min": 0.75,  "max": 1.50, "unit": "m", "speed": 0.07, "default": 1.20, "label": "HATS — MRP height"},
+    {"id": "hats.rot",      "device": "pi-03", "ch": "R",  "min": -180,  "max": 180,  "unit": "deg", "speed": 12, "default": 0,    "label": "HATS — turntable"},
+    {"id": "hats.head",     "device": "pi-03", "ch": "T",  "min": -15,   "max": 35,   "unit": "deg", "speed": 6,  "default": 0,    "label": "HATS — head tilt"},
+
+    {"id": "tableFront.z",    "device": "pi-04", "ch": "SZ", "min": 0.55, "max": 2.00, "unit": "m", "speed": 0.07, "default": 1.35, "label": "Front DUT table — Z"},
+    {"id": "tableFront.lift", "device": "pi-04", "ch": "SY", "min": 0.40, "max": 2.30, "unit": "m", "speed": 0.07, "default": 0.90, "label": "Front DUT table — height"},
+
+    {"id": "tableBack.z",     "device": "pi-05", "ch": "SZ", "min": -2.00, "max": -0.55, "unit": "m", "speed": 0.07, "default": -0.95, "label": "Back Dixie table — Z"},
+    {"id": "tableBack.lift",  "device": "pi-05", "ch": "SY", "min": 0.40,  "max": 2.30,  "unit": "m", "speed": 0.07, "default": 1.20,  "label": "Back Dixie table — height"},
+
+    {"id": "micRig1.x", "device": "pi-06", "ch": "SX", "min": -1.10, "max": 1.10, "unit": "m", "speed": 0.07, "default": -0.35, "label": "Mic boom 1 — X"},
+    {"id": "micRig1.z", "device": "pi-06", "ch": "SZ", "min": -1.30, "max": 1.70, "unit": "m", "speed": 0.07, "default": 0.55,  "label": "Mic boom 1 — Z"},
+    {"id": "micRig1.h", "device": "pi-06", "ch": "SY", "min": 0.70,  "max": 1.50, "unit": "m", "speed": 0.07, "default": 0.95,  "label": "Mic boom 1 — height"},
+
+    {"id": "micRig2.x", "device": "pi-07", "ch": "SX", "min": -1.10, "max": 1.10, "unit": "m", "speed": 0.07, "default": 0.40,  "label": "Mic boom 2 — X"},
+    {"id": "micRig2.z", "device": "pi-07", "ch": "SZ", "min": -1.30, "max": 1.70, "unit": "m", "speed": 0.07, "default": -0.35, "label": "Mic boom 2 — Z"},
+    {"id": "micRig2.h", "device": "pi-07", "ch": "SY", "min": 0.70,  "max": 1.50, "unit": "m", "speed": 0.07, "default": 1.25,  "label": "Mic boom 2 — height"}
+  ]
+}

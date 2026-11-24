@@ -11,6 +11,11 @@ class Settings:
     config_file: str
     # Alert rules sit next to the device list (same data/ directory, same Docker mount).
     alerts_file: str
+    # The 3D room / setups: data/room.json (optional local axis table, overrides the bundled
+    # mcc/room.json), data/room_state.json (homed axes, positions), data/setups/ (saved setups).
+    room_file: str
+    room_state_file: str
+    setups_dir: str
 
     # Seconds a single command may take. Each Pi reports its own COMMAND_TIMEOUT and
     # MAX_COMMAND_TIMEOUT in /api/status and those win; these are only used before the
@@ -33,9 +38,13 @@ class Settings:
 
 def load_settings():
     config_file = os.getenv('CONFIG_FILE', os.path.join('data', 'pi_config.json'))
+    data_dir = os.path.dirname(config_file) or '.'
     return Settings(
         config_file=config_file,
-        alerts_file=os.getenv('ALERTS_FILE', os.path.join(os.path.dirname(config_file) or '.', 'alerts.json')),
+        alerts_file=os.getenv('ALERTS_FILE', os.path.join(data_dir, 'alerts.json')),
+        room_file=os.getenv('ROOM_FILE', os.path.join(data_dir, 'room.json')),
+        room_state_file=os.path.join(data_dir, 'room_state.json'),
+        setups_dir=os.path.join(data_dir, 'setups'),
         default_command_timeout=float(os.getenv('DEFAULT_COMMAND_TIMEOUT', '130')),
         max_command_timeout=float(os.getenv('MAX_COMMAND_TIMEOUT', '300')),
         api_token=os.getenv('API_TOKEN', ''),

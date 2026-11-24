@@ -1,0 +1,63 @@
+{
+  "id": "teams-v5-08",
+  "name": "T5-08-RR-PERSONAL-SPK",
+  "description": "HATS 到 DUT 1 m。吊架 1 放 DUT 麥克風旁 —— 高度 1.40 是假設 webcam 夾在 24\" 螢幕頂端。\n[換算] 嘴 z=0.15 高 1.25;桌面中心 z=1.15 高 0.95\n[人工] 吊架 1 高度依 DUT 麥克風實際高度調整\n[規範] Teams Audio Spec V5 §4.4.2 Fig.37 p.72",
+  "group": "MS Teams V5",
+  "created": "2026-11-21T16:40:51.574",
+  "updated": "2026-11-21T16:40:51.574",
+  "source": "library",
+  "axes": {
+    "speakers.x": 0.0,
+    "speakers.lift": 1.3,
+    "screen.z": 2.35,
+    "screen.lift": 1.25,
+    "hats.z": 0.0,
+    "hats.x": 0.0,
+    "hats.mrp": 1.25,
+    "hats.rot": 0.0,
+    "hats.head": 0.0,
+    "tableFront.z": 1.15,
+    "tableFront.lift": 0.9,
+    "tableBack.z": -0.95,
+    "tableBack.lift": 1.2,
+    "micRig1.x": 0.05,
+    "micRig1.z": 1.1,
+    "micRig1.h": 1.4,
+    "micRig2.x": 1.1,
+    "micRig2.z": -0.35,
+    "micRig2.h": 1.5
+  },
+  "overlays": {
+    "points": [
+      {
+        "id": "dut",
+        "label": "Webcam (top of dummy monitor)",
+        "on": "tableFront",
+        "offset": [
+          0.0,
+          0.45,
+          0.0
+        ],
+        "style": "dut"
+      },
+      {
+        "id": "monitor",
+        "label": "24\" dummy monitor (manual)",
+        "on": "tableFront",
+        "offset": [
+          0.0,
+          0.26,
+          0.02
+        ],
+        "style": "ghost"
+      }
+    ],
+    "circles": [],
+    "distances": [
+      {
+        "from": "hats",
+        "to": "dut"
+      }
+    ]
+  }
+}

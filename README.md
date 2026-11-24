@@ -48,7 +48,12 @@ app.py                  進入點（Docker 用 gunicorn app:app；開發用 pyth
 mcc/                    應用程式本體
   __init__.py             create_app()：建立 Flask app、註冊路由、API token 檢查、錯誤處理
   config.py               所有環境變數設定（.env）集中在這裡
-  services.py             所有路由共用的長駐物件（裝置清單、狀態監控、健康同步、告警）
+  services.py             所有路由共用的長駐物件（裝置清單、狀態監控、健康同步、告警、3D 房間）
+  dispatch.py             送一個韌體指令（指令 API 和 setup 工作共用：同一把鎖、同樣更新歸位狀態）
+  room.py                 3D 房間：軸對應表、歸位 / 位置狀態、setup 工作（一次一軸）
+  room.json               內建的軸對應表（data/room.json 存在時以它為準）
+  setups.py               存好的 setup（data/setups/）與內建範例（setup_library/），含 overlays
+  setup_library/          內建範例 setup（唯讀）：MS Teams V5 的 14 個 test setup
   devices.py              裝置清單 data/pi_config.json（偵測手動修改、壞檔保護、停車位置）
   monitor.py              背景狀態輪詢 + 「每台裝置同時只跑一個指令」的鎖
   pi_client.py            呼叫 Pi 的 HTTP（錯誤統一轉成 PiError，附帶它代表的裝置狀態）
@@ -62,7 +67,9 @@ mcc/                    應用程式本體
     commands.py             測試連線、指令表、送指令（含逾時決定）
     monitoring.py           健康監控：綁定 agent、歷史、容器、agent 設定
     alerts.py               告警規則與 webhook 測試
+    room.py                 3D 房間頁、套用 setup、工作進度、存好的 setup
 templates/index.html    頁面骨架與對話框
+templates/room.html     3D 房間頁（three.js 從 CDN 載入，不需要 build）
 static/style.css        樣式（沿用 ACQUA-Automation 的設計：主色 #009B85 + 白），依區塊分段
 static/js/              前端，依功能分檔、照順序載入、不需要 build
   core.js                 設定、共用狀態、api()、API token、通知、確認視窗
@@ -72,6 +79,10 @@ static/js/              前端，依功能分檔、照順序載入、不需要 b
   monitoring.js           Monitoring 頁、容器清單、告警規則
   park.js                 停車位置、Home & park、Home all devices
   main.js                 定時刷新、事件處理、啟動
+static/room/            3D 房間（從 ACQUA Automation 的 soundproofroom 移植，ES module）
+  spec.js / look.js / config.js / builders.js / interaction.js   場景（尺寸、外觀、物件、拖曳），與 ACQUA 相同
+  main.js / live.js / setups.js / ui.js                          面板、即時模式、setup 存取、對話框（接本專案 API）
+  overlays.js                                                    示意圓、標記點、距離（固定 / 調整時自動量測）
 tests/                  pytest（不需要 Pi 或 Beszel）
 deploy/ansible/         一次部署所有 Pi 並註冊到這裡（見下方「用 Ansible 部署多台 Pi」）
 docker-compose.yml      控制中心 + Beszel hub
@@ -143,7 +154,7 @@ python app.py
 
 | 區塊 | 功能 |
 |---|---|
-| 左側欄 | **▦** Devices 頁、**◔** Monitoring 頁（紅色數字 = 目前的告警數）、**⚙** 在 Pi 上啟用健康監控的說明、底部圓點 = 與控制中心伺服器的連線 |
+| 左側欄 | **▦** Devices 頁、**◔** Monitoring 頁（紅色數字 = 目前的告警數）、**⬚** 3D 房間與 setup（見[3D 房間與 setup](#3d-房間與-setup)）、**⚙** 在 Pi 上啟用健康監控的說明、底部圓點 = 與控制中心伺服器的連線 |
 | 裝置清單 | 點一台切換右邊面板；顯示狀態徽章、IP、CPU／溫度、⚠ 告警數；正在跑指令時圓點變成轉圈 |
 | Home all devices | 每台先歸位（X → Y → Z → 旋轉），再移動到**那台的停車位置**（有設定的話）；裝置之間並行，某一步失敗就停止那台，結束時顯示幾台完成／失敗。見[歸位與停車位置](#歸位與停車位置) |
 | Test all connections | 測試所有裝置，結束時顯示「幾台 online」 |
@@ -181,6 +192,64 @@ python app.py
 - 右上 **Alert rules** 設定告警，見[告警](#告警)
 
 網址加上 `#health` 會直接打開 Monitoring 頁；`#device=pi-01` 直接打開那台裝置。
+
+### 3D 房間與 setup
+
+左側欄 **⬚** 打開 `/room`：聲學測試室的 3D 模擬（從 ACQUA Automation 移植，同一份場景）。
+
+- **Setup 模式**：拖曳物件或拉桿排出一組位置，存成 setup。不會動到任何機構
+- **Live 模式**：3D 顯示控制中心回報的實機位置；拉桿放手會先跳確認（從哪到哪、多遠、多久、哪個指令）才移動；
+  也可以選一個存好的 setup **Apply to the rig**，或把目前實機位置存成 setup
+
+**setup 由這個專案執行**：ACQUA Automation 只要送「setup 名稱 + 每根軸的目標（公尺 / 度）」到
+`POST /api/room/apply`，再輪詢 job 直到完成，見 [API](#post-apiroomapply給-acqua-automation-用)。
+控制中心負責：
+
+1. **對應**：哪根軸在哪台 Pi、哪個韌體軸、公尺換算成 mm，寫在軸對應表 `mcc/room.json`
+2. **順序**：**一次只動一軸**，照軸對應表裡的排列順序（要先讓開的軸排前面）
+3. **歸位**：Arduino 重開機後（Pi 重開、重新部署、USB 重插都會）每一軸的位置都會歸零失準。
+   Pi 會回報 `arduino_session`，每次重開都不同；控制中心偵測到變了，就把那台的軸標成「未歸位」，
+   下一次移動前**自動先歸位**再移動。移動途中 Arduino 重開，會再歸位一次並重送
+4. **失敗判斷**：韌體回 `ERR`、`Exceeded Max travel`（沒校正或超出校正行程）、`ERROR: ...`，都算失敗並停止後面的軸
+
+手動按 Home（Devices 頁、Home all）也算歸位，之後的 setup 不會再歸位一次。
+
+#### 示意圓、標記點、距離
+
+兩層：
+
+**Setup 帶的示意**（側欄 **Setup overlays**，跟著 setup 一起存，不會動到機構）：
+
+| 項目 | 說明 |
+|---|---|
+| 標記點 | 掛在某個物件上 + 位移 (x, y, z)，跟著物件動。樣式：DUT（橘）、人工道具（紫，房間沒有對應軸的東西）、一般標記 |
+| 示意圓 | 白色虛線圓，圓心是任一物件或標記點；多個半徑、整圈或半圈（開口朝 HATS 嘴）、畫在圓心高度或 HATS 嘴高度 |
+| 固定距離 | 任兩點一直顯示：**水平距離 · ↕ 高度差**（測試規範給的都是水平距離） |
+
+**要看哪些**（3D 畫面左上角 **Show** 面板，只影響自己的畫面、記在瀏覽器，不存進 setup；可收合）：
+
+| 區塊 | 說明 |
+|---|---|
+| Distances | 選一個基準物件（預設 HATS 嘴），勾選要一直顯示距離的物件（黃色虛線）。「While adjusting」：拖曳 / 拉桿 / 實機移動某個物件時，暫時顯示它到勾選物件的距離；沒勾任何物件時只顯示到基準物件的那一條 |
+| Circles | 每個物件都能勾一個快速示意圓、自己填半徑（例如 `1, 1.5`）；setup 帶的圓也可以個別開關 |
+| Setup marks | setup 帶的固定距離、DUT、人工道具，個別開關 |
+| Short labels | 標籤只顯示數字，畫面比較乾淨 |
+
+物件參考點：HATS 嘴（MRP）、前 / 後桌面中心、螢幕中心（顯示面）、喇叭陣列（台車前緣）、Mic 1 / 2。標籤重疊時會自動錯開。
+
+**內建範例**：`mcc/setup_library/` 有 MS Teams Audio Spec V5 的 14 個 test setup（來源：`zoom和meet測試規定/teams_v5_setups`），
+附 DUT 位置、嘴到 DUT 的距離、Talker 1 / 2 圓（1 m / 1.5 m）、Talker 2、HRR 反射板、dummy 螢幕等示意。
+在 3D 房間的選單 **Examples · MS Teams V5** 下，可以直接載入、套用到實機，或另存一份再修改。
+推導過程與待確認事項見那個資料夾的 README（軸值標 `[推估]`、`[我的決定]` 的都還沒對過現場）。
+
+> 3D 模型的 HATS 高度已修正：原本 `hats.mrp = 1.20` 時畫面上的嘴在 1.59 m（高了 0.39 m），
+> 現在嘴的位置等於軸值，距離量測才會對。
+
+**改接線或順序**：把 `mcc/room.json` 複製成 `data/room.json` 再改，存檔就生效（壞掉的 JSON 會保留舊表並在 3D 頁顯示錯誤）。
+3D 畫面的行程（`static/room/spec.js`）和軸對應表不一致時，Live 模式會顯示警告，實際以軸對應表為準。
+
+> ⚠ 需要新版 Pi 程式（會回報 `arduino_session`）。舊版 Pi 不回報時，控制中心無法偵測重開機，
+> 會在**每次**移動前都先歸位（安全但慢）。更新方式：Pi 專案 push 後重跑 Ansible。
 
 ### 非阻塞操作
 
@@ -361,6 +430,11 @@ python app.py
 |---|---|---|
 | `data/pi_config.json` | 裝置清單（含停車位置、Beszel 綁定） | ✗（`.gitignore`） |
 | `data/alerts.json` | 告警規則與 webhook URL（第一次在網頁上儲存時產生） | ✗（`.gitignore`） |
+| `mcc/room.json` | 內建的軸對應表（哪根軸在哪台 Pi、行程、**移動順序**） | ✓ |
+| `data/room.json` | （選用）本機的軸對應表，存在時取代 `mcc/room.json`，改完存檔就生效、不用重建 | ✗ |
+| `data/room_state.json` | 每台 Arduino 的開機識別、哪幾軸已歸位、每軸最後送出的位置（重啟控制中心後保留） | ✗ |
+| `data/setups/` | 3D 房間存的 setup，一個檔案一個（含 overlays） | ✗ |
+| `mcc/setup_library/` | 內建範例 setup（MS Teams V5 × 14，唯讀；要改請另存一份） | ✓ |
 | `beszel_data/` | Beszel 帳號、系統、歷史數據 | ✗（`.gitignore`） |
 
 `data/pi_config.json` 第一次啟動時自動產生：
@@ -419,6 +493,14 @@ python app.py
 | `GET` | `/api/alerts` | 告警規則、觸發中的告警、最近的觸發 / 解除紀錄 |
 | `PUT` | `/api/alerts` | 儲存告警規則 / webhook URL |
 | `POST` | `/api/alerts/test` | 對 webhook 送一則測試訊息 |
+| `GET` | `/api/room/axes` | 軸對應表（順序 = 移動順序） |
+| `GET` | `/api/room/live` | 每根軸目前位置、目前的 setup 工作、相關裝置狀態 |
+| `POST` | `/api/room/apply` | **移動到一個 setup**（馬上回 job，背景一次一軸執行） |
+| `POST` | `/api/room/move` | 移動單一軸（同樣是 job） |
+| `GET` | `/api/room/jobs` / `/api/room/jobs/<id>` | setup 工作進度（輪詢到結束） |
+| `POST` | `/api/room/stop` | 停止目前的 setup（正在動的那一軸會走完） |
+| `GET`/`POST` | `/api/room/setups` | 存好的 setup：列出 / 新增 |
+| `GET`/`POST`/`DELETE` | `/api/room/setups/<id>` | 讀 / 更新 / 刪除一個 setup |
 
 ### `GET /api/pis`
 
@@ -595,6 +677,53 @@ python app.py
 
 `POST /api/alerts/test`：送一則測試訊息到目前的 webhook URL；沒設定時回 `400`，送失敗回 `502`。
 
+### `POST /api/room/apply`（給 ACQUA Automation 用）
+
+```json
+{ "name": "0915-1", "source": "acqua",
+  "axes": { "hats.mrp": 1.2, "hats.rot": 90, "screen.z": 1.33 } }
+```
+
+- `axes` 的鍵是 `/api/room/axes` 的軸 id，值的單位是公尺（線性軸）/ 度（旋轉、傾角），不用換算成韌體數值
+- 也可以送 `{"setup_id": "..."}` 套用這裡存好的 setup
+- **先全部檢查才開始動**，任何一項不通過就回錯誤、一軸都不動：
+  - `400`：未知的軸、不是數字、超出行程 → `problems` 列出每一項
+  - `409`：有 setup 正在跑、裝置不在清單 / 不在線上 / 正在執行別的指令 → `problems` 列出每一台
+- 通過就回 `202` 和 job（這時還沒動完）：
+
+```json
+{ "status": "success", "job": { "id": "3f9c1a2b4d5e", "name": "0915-1", "state": "running",
+    "index": 0, "eta": 42.5, "unchanged": ["hats.rot"],
+    "steps": [ { "axis": "screen.z", "device": "pi-02", "command": "SZM,130", "state": "pending",
+                 "homed_first": false, "from": 2.05, "to": 1.33, "error": null }, ... ] } }
+```
+
+然後每秒 `GET /api/room/jobs/<id>`，直到 `state` 不是 `running` / `aborting`：
+
+| `state` | 意思 |
+|---|---|
+| `running` | 進行中；`index` 是正在處理第幾步，該步的 `state` 是 `homing`（先歸位）或 `moving` |
+| `aborting` | 收到停止，正在等目前這一軸走完 |
+| `done` | 全部到位 |
+| `error` | 某一軸失敗，`error` 說明原因，後面的軸 `skipped`（沒動） |
+| `aborted` | 被停止，沒做的軸 `skipped` |
+
+- 已經在目標位置的軸不會送指令，列在 `unchanged`；全部都在位置上時直接回 `state: "done"`、`steps: []`
+- 完成的 job 只保留在記憶體（最近 20 個），控制中心重啟就查不到了
+- setup 執行期間，手動對同一台裝置送指令（網頁按鈕、`/api/pi/<id>/command`）會回 `409`
+
+### `GET /api/room/live`
+
+```json
+{ "axes": { "hats.mrp": { "value": 1.2, "estimated": false, "known": true, "homed": true }, ... },
+  "job": { ... 目前（最近一次）的 job ... },
+  "devices": { "pi-03": { "status": "online", "name": "HATS rig", "homed": ["SX", "SY"] } },
+  "config": { "path": "/app/mcc/room.json", "error": null } }
+```
+
+- `known: false`：那一軸自 Arduino 上次開機後還沒歸位，位置未知（`value` 是 `room.json` 的 `default`，只給 3D 畫面用）
+- `estimated: true`：正在移動中（依標稱速度推算）或位置未知
+
 ### `GET /api/beszel/agent-env`
 
 回傳給 Pi `.env` 的四行（`env`：`COMPOSE_PROFILES`、`BESZEL_HUB_URL`、`BESZEL_KEY`、`BESZEL_TOKEN`），
@@ -645,7 +774,8 @@ python -m pytest
 ```
 
 不需要 Pi 或 Beszel hub：涵蓋裝置清單 upsert、逾時決定方式、Pi 的 busy / 409 對應、指令表轉發、健康歷史資料轉換、
-容器清單、停車位置、告警觸發 / 解除 / webhook、API token。
+容器清單、停車位置、告警觸發 / 解除 / webhook、API token；
+3D 房間：軸對應表驗證、setup 的移動順序、未歸位先歸位、Arduino 重開後重新歸位、失敗與停止、送出前的檢查。
 Pi 端的序列埠協定測試在 Pi 專案裡。
 
 ---

@@ -11,6 +11,10 @@ Package layout:
   pi_client.py   HTTP calls to the Pis
   beszel.py      Pi health from the Beszel hub + two-way sync of the device list
   alerts.py      health alert rules, active alerts, webhook notifications
+  dispatch.py    running one firmware command (shared by the command API and setup jobs)
+  room.py        axis table, homed state / positions, setup jobs (one axis at a time)
+  room.json      the bundled axis table (data/room.json overrides it)
+  setups.py      saved setups (data/setups/) and bundled examples (setup_library/)
   storage.py     atomic JSON writes for the files in data/
   web.py         response / request / validation helpers for the routes
   routes/        HTTP routes, one Blueprint per area

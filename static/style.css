@@ -32,12 +32,12 @@ body { margin:0; background:var(--bg); color:var(--fg);
 .nav .st.ok { background:#fff; }
 .nav .st.dead { background:#ffd0cb; }
 
-/* sidebar icon buttons: views, setup; .on = current view */
-.nav button.navb { position:relative; width:38px; height:38px; border-radius:9px; border:none; background:transparent;
+/* sidebar icon buttons (views, setup) and links (3D room); .on = current view */
+.nav .navb { position:relative; width:38px; height:38px; border-radius:9px; border:none; background:transparent;
         color:#ffffffb0; cursor:pointer; display:flex; align-items:center; justify-content:center;
         font-size:16px; text-decoration:none; transition:background .12s, color .12s; padding:0; }
-.nav button.navb:hover { background:#ffffff24; color:#fff; }
-.nav button.navb.on { background:#fff; color:var(--brand); }
+.nav .navb:hover { background:#ffffff24; color:#fff; }
+.nav .navb.on { background:#fff; color:var(--brand); }
 .nbadge { position:absolute; top:3px; right:3px; min-width:15px; height:15px; padding:0 3px;
           border-radius:8px; background:var(--fail); color:#fff; font-size:9px; font-weight:700;
           line-height:15px; text-align:center; }

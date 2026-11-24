@@ -1,0 +1,47 @@
+{
+  "id": "teams-v5-03",
+  "name": "T5-03-ANY-DESKPHONE-HANDSET",
+  "description": "話筒夾在 HATS 右耳(施力 8N±2N,ITU-T P.64)。吊架 1 放話筒麥克風旁給殘響室 3QUEST 用。\n[換算] 嘴 z=0.15 高 1.20\n[人工] 話筒定位器夾持 8N±2N / 頻響穩定度:HATS A/B/C 角度 3~5° 步進、位移 2~10 mm,逐案記錄\n[規範] Teams Audio Spec V5 §3.4.1 Fig.21 p.55",
+  "group": "MS Teams V5",
+  "created": "2026-11-21T16:40:51.574",
+  "updated": "2026-11-21T16:40:51.574",
+  "source": "library",
+  "axes": {
+    "speakers.x": 0.0,
+    "speakers.lift": 1.3,
+    "screen.z": 2.35,
+    "screen.lift": 1.25,
+    "hats.z": 0.0,
+    "hats.x": 0.0,
+    "hats.mrp": 1.2,
+    "hats.rot": 0.0,
+    "hats.head": 0.0,
+    "tableFront.z": 1.8,
+    "tableFront.lift": 0.4,
+    "tableBack.z": -0.95,
+    "tableBack.lift": 1.2,
+    "micRig1.x": 0.06,
+    "micRig1.z": 0.15,
+    "micRig1.h": 1.15,
+    "micRig2.x": 1.1,
+    "micRig2.z": -0.35,
+    "micRig2.h": 1.5
+  },
+  "overlays": {
+    "points": [
+      {
+        "id": "dut",
+        "label": "Handset on the right ear, 8 N ± 2 N",
+        "on": "hats",
+        "offset": [
+          0.0,
+          0.12,
+          0.0
+        ],
+        "style": "dut"
+      }
+    ],
+    "circles": [],
+    "distances": []
+  }
+}

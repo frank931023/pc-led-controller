@@ -1,0 +1,52 @@
+{
+  "id": "teams-v5-09",
+  "name": "T5-09-AR-SHARED-TABLE",
+  "description": "嘴高出桌面 30 cm、到 DUT 1.00 m;DUT 放在桌面中心往後 20 cm(= 離前緣 60 cm)。DUT 偏高時嘴對準 DUT 頂端。\n[換算] 嘴 z=0.15 高 1.25;桌面中心 z=0.95 高 0.95\n[人工] 延伸麥克風 / 串接款:延伸件放 1 m 處,主機再往後至少 50 cm —— 超出 0.8 m 桌面,要第二張桌子\n[規範] Teams Audio Spec V5 §5.4.1 Fig.46 p.86",
+  "group": "MS Teams V5",
+  "created": "2026-11-21T16:40:51.574",
+  "updated": "2026-11-21T16:40:51.574",
+  "source": "library",
+  "axes": {
+    "speakers.x": 0.0,
+    "speakers.lift": 1.3,
+    "screen.z": 2.35,
+    "screen.lift": 1.25,
+    "hats.z": 0.0,
+    "hats.x": 0.0,
+    "hats.mrp": 1.25,
+    "hats.rot": 0.0,
+    "hats.head": 0.0,
+    "tableFront.z": 0.95,
+    "tableFront.lift": 0.9,
+    "tableBack.z": -0.95,
+    "tableBack.lift": 1.2,
+    "micRig1.x": -1.1,
+    "micRig1.z": 0.55,
+    "micRig1.h": 1.5,
+    "micRig2.x": 1.1,
+    "micRig2.z": -0.35,
+    "micRig2.h": 1.5
+  },
+  "overlays": {
+    "points": [
+      {
+        "id": "dut",
+        "label": "DUT (60 cm from the table edge)",
+        "on": "tableFront",
+        "offset": [
+          0.0,
+          0.04,
+          0.2
+        ],
+        "style": "dut"
+      }
+    ],
+    "circles": [],
+    "distances": [
+      {
+        "from": "hats",
+        "to": "dut"
+      }
+    ]
+  }
+}

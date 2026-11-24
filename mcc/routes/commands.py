@@ -3,32 +3,12 @@
 from flask import Blueprint
 
 from .. import pi_client, services
+from ..dispatch import CommandError, resolve_timeout, run
 from ..web import BAD_JSON, fail, json_object, ok
 
 bp = Blueprint('commands', __name__)
 
 MAX_COMMAND = 64
-
-
-def resolve_timeout(device_id, raw):
-    """
-    Returns (timeout_seconds, error_message) for one command.
-
-    Always resolves to a number: the Pi must be told explicitly, otherwise it would wait
-    its own default (e.g. 130 s) while our HTTP request gave up much earlier, the device
-    looked offline and our lock was released mid-command.
-    """
-    info = services.monitor.info(device_id)
-    limit = info.get('max_command_timeout') or services.settings.max_command_timeout
-    if raw in (None, ''):
-        return info.get('command_timeout') or services.settings.default_command_timeout, None
-    try:
-        timeout = float(raw)
-    except (TypeError, ValueError):
-        return None, f'Invalid timeout value: {raw!r}'
-    if not 1 <= timeout <= limit:
-        return None, f'Timeout must be between 1 and {limit:g} seconds'
-    return timeout, None
 
 
 @bp.route('/api/pi/<pi_id>/test', methods=['GET', 'POST'])
@@ -71,9 +51,7 @@ def send_command(pi_id):
     Send one firmware command, e.g. {"command": "SXM,500", "timeout": 40}.
     timeout (seconds) is optional; without it the Pi's own COMMAND_TIMEOUT is used.
     """
-    monitor = services.monitor
-    device = services.store.get(pi_id)
-    if device is None:
+    if services.store.get(pi_id) is None:
         return fail('Pi not found', 404)
 
     data = json_object()
@@ -92,18 +70,15 @@ def send_command(pi_id):
     if error:
         return fail(error, 400)
 
-    # One command per device: the Arduino handles one blocking command at a time. The Pi
-    # refuses a second one too (409), but checking here first saves the round trip.
-    if not monitor.try_begin(pi_id, cmd):
-        return fail(f'Busy running {monitor.running(pi_id)}', 409, busy=True)
-    try:
-        body = pi_client.send_command(device, cmd, timeout)
-    except pi_client.PiError as e:
-        monitor.set(pi_id, e.pi_status)
-        return fail(str(e), e.http_status, pi_status=monitor.status(pi_id),
-                    busy=e.pi_status == pi_client.BUSY)
-    finally:
-        monitor.end(pi_id)
+    # A setup job owns its devices until it ends: a manual move in between would put an
+    # axis somewhere the job does not expect.
+    job = services.room.job_holding(pi_id)
+    if job:
+        return fail(f'A setup is moving this device ("{job}"); wait for it or stop it in the 3D room',
+                    409, busy=True)
 
-    monitor.set(pi_id, pi_client.ONLINE)
+    try:
+        body = run(pi_id, cmd, timeout)
+    except CommandError as e:
+        return fail(str(e), e.http_status, pi_status=services.monitor.status(pi_id), busy=e.busy)
     return ok(pi_id=pi_id, command=cmd, pi_response=body)

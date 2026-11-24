@@ -1,0 +1,91 @@
+{
+  "id": "teams-v5-11",
+  "name": "T5-11-RR-SHARED-TABLE-T1P1",
+  "description": "Talker 1(HATS)Position 1:到 DUT 1 m、嘴高出桌面 0.3 m。吊架 1 放 DUT 麥克風旁(Talker 1 那側)。\n[換算] 嘴 z=0.15 高 1.25;桌面中心 z=1.15 高 0.95\n[人工] Talker 2(人工嘴)在半徑 1.5 m 的 Pos1/Pos2 —— 房間沒有對應軸 / Talker 1 Position 2 在 1 m 圓上另一個角度 —— HATS 橫移只有 ±0.55 m(最多約 33°),需另存擺位或人工轉 / DUT 方向:純音訊朝按鍵最好操作的那面、有影像朝螢幕、有延伸件朝延伸件軸線\n[規範] Teams Audio Spec V5 §5.4.3 Fig.56/57 p.93-94",
+  "group": "MS Teams V5",
+  "created": "2026-11-21T16:40:51.574",
+  "updated": "2026-11-21T16:40:51.574",
+  "source": "library",
+  "axes": {
+    "speakers.x": 0.0,
+    "speakers.lift": 1.3,
+    "screen.z": 2.35,
+    "screen.lift": 1.25,
+    "hats.z": 0.0,
+    "hats.x": 0.0,
+    "hats.mrp": 1.25,
+    "hats.rot": 0.0,
+    "hats.head": 0.0,
+    "tableFront.z": 1.15,
+    "tableFront.lift": 0.9,
+    "tableBack.z": -0.95,
+    "tableBack.lift": 1.2,
+    "micRig1.x": 0.05,
+    "micRig1.z": 1.07,
+    "micRig1.h": 1.0,
+    "micRig2.x": 1.1,
+    "micRig2.z": -0.35,
+    "micRig2.h": 1.5
+  },
+  "overlays": {
+    "points": [
+      {
+        "id": "dut",
+        "label": "DUT (table centre)",
+        "on": "tableFront",
+        "offset": [
+          0.0,
+          0.04,
+          0.0
+        ],
+        "style": "dut"
+      },
+      {
+        "id": "t2p1",
+        "label": "Talker 2 Pos1 (manual, approximate)",
+        "on": "tableFront",
+        "offset": [
+          1.1491,
+          0.3,
+          0.9642
+        ],
+        "style": "ghost"
+      },
+      {
+        "id": "t2p2",
+        "label": "Talker 2 Pos2 (manual, approximate)",
+        "on": "tableFront",
+        "offset": [
+          -1.299,
+          0.3,
+          0.75
+        ],
+        "style": "ghost"
+      }
+    ],
+    "circles": [
+      {
+        "id": "talker",
+        "at": "dut",
+        "offset": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "radii": [
+          1.0,
+          1.5
+        ],
+        "span": "full",
+        "level": "mouth",
+        "label": "Talker 1 (1 m) / Talker 2 (1.5 m)"
+      }
+    ],
+    "distances": [
+      {
+        "from": "hats",
+        "to": "dut"
+      }
+    ]
+  }
+}

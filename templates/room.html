@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Test Room 3D</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%23009B85'/%3E%3Ctext x='16' y='22' font-family='Segoe UI,sans-serif' font-size='17' font-weight='700' fill='white' text-anchor='middle'%3EM%3C/text%3E%3C/svg%3E">
+<link rel="stylesheet" href="{{ url_for('static', filename='room/style.css') }}?v={{ v }}">
+<style>
+  /* The 3D page is dark (its own style.css); only the tokens the side nav needs are added here. */
+  :root {
+    --brand:#009B85; --brand-soft:#009B8522;
+    --panel:#161b22; --line:#262d36; --sunk:#1c2129;
+    --fg:#e6e9ef; --muted:#8b93a1; --faint:#6d7683;
+    --fail:#f85149; --r-sm:7px; --nav:56px;
+  }
+  html, body { height:100%; margin:0; overflow:hidden; }
+  .shell { display:grid; grid-template-columns:var(--nav) 1fr; height:100vh; overflow:hidden; }
+  .shell #app { height:100vh; min-width:0; }
+  .nav { background:var(--brand); display:flex; flex-direction:column; align-items:center;
+         gap:6px; padding:12px 0; }
+  .nav .logo { width:30px; height:30px; border-radius:8px; background:#ffffff26; color:#fff;
+               display:flex; align-items:center; justify-content:center; font:700 15px 'Segoe UI',sans-serif;
+               margin-bottom:10px; }
+  .nav .navb { width:38px; height:38px; border-radius:9px; color:#ffffffb0; display:flex;
+               align-items:center; justify-content:center; font-size:16px; text-decoration:none; }
+  .nav .navb:hover { background:#ffffff24; color:#fff; }
+  .nav .navb.on { background:#fff; color:var(--brand); }
+  button { font:inherit; }
+</style>
+
+<!--
+  No build step: the browser's import map points the bare module name "three" at the CDN
+  (same pinned version as ACQUA's copy of this page), so static/room/*.js run as they are.
+-->
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://unpkg.com/three@0.169.0/build/three.module.js",
+    "three/addons/": "https://unpkg.com/three@0.169.0/examples/jsm/"
+  }
+}
+</script>
+</head>
+<body>
+<div class="shell">
+  <nav class="nav">
+    <div class="logo">M</div>
+    <a class="navb" href="/" title="Devices and controls">▦</a>
+    <a class="navb" href="/#health" title="Monitoring: health of every Pi">◔</a>
+    <a class="navb on" href="/room" title="3D room: setups and live positions">⬚</a>
+  </nav>
+  <div id="app">
+    <div id="viewport">
+      <div id="hint"></div>
+      <div id="viewpanel"></div>
+    </div>
+    <aside id="panel"></aside>
+  </div>
+</div>
+
+<div id="err" style="display:none;position:fixed;inset:0;background:#0d1116;color:#f85149;
+     padding:40px;font:14px/1.8 Consolas,monospace;white-space:pre-wrap;z-index:999"></div>
+<script>
+  // three.js comes from unpkg.com: say so plainly when it cannot be loaded (offline PC).
+  window.addEventListener('error', function (e) {
+    if (e.target && e.target.tagName === 'SCRIPT') showErr('Script failed to load: ' + e.target.src);
+  }, true);
+  window.addEventListener('unhandledrejection', function (e) {
+    showErr('Module failed to load: ' + (e.reason && e.reason.message ? e.reason.message : e.reason));
+  });
+  function showErr(msg) {
+    var el = document.getElementById('err');
+    el.style.display = 'block';
+    el.textContent = 'The 3D room could not start.\n\n' + msg +
+      '\n\nThis page loads three.js from unpkg.com, so the browser needs internet access.';
+  }
+</script>
+<script type="module" src="{{ url_for('static', filename='room/main.js') }}?v={{ v }}"></script>
+</body>
+</html>

@@ -1,0 +1,52 @@
+{
+  "id": "teams-v5-10",
+  "name": "T5-10-AR-SHARED-EDGE",
+  "description": "Edge of room / 大螢幕型:大螢幕退到牆邊當 TV + 背牆,嘴對螢幕中心、距離 1.00 m。前桌退到 HATS 後方降到最低。\n[換算] 嘴 z=1.35 高 1.10;螢幕 z=2.35 中心高 1.10(嘴到螢幕 1.00 m)\n[人工] DUT(soundbar/攝影機 bar)裝在螢幕上方或下方 / 可直橫轉的 DUT:頻響與所有 E2E 項目兩個方向都要測 / soundbar 裝下方時規範要嘴高出 soundbar 20~30 cm -> screen.lift 改 ≈ MRP+0.145;裝上方要低 60~80 cm -> ≈ MRP+0.305(另存擺位) / 天花板麥克風 / huddle / EMTR 變體:房間沒有天花板安裝點與左右壁掛喇叭軸\n[規範] Teams Audio Spec V5 §5.4.2 Fig.51/52 p.88-89",
+  "group": "MS Teams V5",
+  "created": "2026-11-21T16:40:51.574",
+  "updated": "2026-11-21T16:40:51.574",
+  "source": "library",
+  "axes": {
+    "speakers.x": 0.0,
+    "speakers.lift": 1.3,
+    "screen.z": 2.35,
+    "screen.lift": 1.1,
+    "hats.z": 1.2,
+    "hats.x": 0.0,
+    "hats.mrp": 1.1,
+    "hats.rot": 0.0,
+    "hats.head": 0.0,
+    "tableFront.z": 0.55,
+    "tableFront.lift": 0.4,
+    "tableBack.z": -0.95,
+    "tableBack.lift": 1.2,
+    "micRig1.x": -1.1,
+    "micRig1.z": 0.55,
+    "micRig1.h": 1.5,
+    "micRig2.x": 1.1,
+    "micRig2.z": -0.35,
+    "micRig2.h": 1.5
+  },
+  "overlays": {
+    "points": [
+      {
+        "id": "dut",
+        "label": "DUT (top edge of the display)",
+        "on": "screen",
+        "offset": [
+          0.0,
+          0.407,
+          0.0
+        ],
+        "style": "dut"
+      }
+    ],
+    "circles": [],
+    "distances": [
+      {
+        "from": "hats",
+        "to": "dut"
+      }
+    ]
+  }
+}

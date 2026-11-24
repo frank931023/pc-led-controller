@@ -1,0 +1,91 @@
+{
+  "id": "teams-v5-12",
+  "name": "T5-12-RR-SHARED-EDGE-T1P1",
+  "description": "Edge of room Talker 1 Pos1:0°、距離 1 m、HATS 高度對齊螢幕中心。吊架 1 放螢幕上緣前方(假設 DUT 麥克風在上緣)。螢幕在 1.85 而不是 2.35:吊架 Z 行程只到 1.70,搆不到貼牆的螢幕。\n[換算] 嘴 z=0.85 高 1.10;螢幕 z=1.85 中心高 1.10(嘴到螢幕 1.00 m)\n[人工] DUT 麥克風在螢幕下緣的話,吊架 1 高度改 ≈ 0.70 / 前桌降到 0.40 停在 HATS 與螢幕之間(桌面 0.45 m,低於嘴 -> DUT 路徑) / Talker 1/2 Position 2 在相機 FOV 邊緣或 ±60° —— 1 m 圓上 60° 需要 x≈0.87 m,超出 HATS 橫移 ±0.55 / Talker 2(人工嘴)1.5 m 圓 —— 房間沒有對應軸\n[規範] Teams Audio Spec V5 §5.4.4 Fig.60/62 p.97-99",
+  "group": "MS Teams V5",
+  "created": "2026-11-21T16:40:51.574",
+  "updated": "2026-11-21T16:40:51.574",
+  "source": "library",
+  "axes": {
+    "speakers.x": 0.0,
+    "speakers.lift": 1.3,
+    "screen.z": 1.85,
+    "screen.lift": 1.1,
+    "hats.z": 0.7,
+    "hats.x": 0.0,
+    "hats.mrp": 1.1,
+    "hats.rot": 0.0,
+    "hats.head": 0.0,
+    "tableFront.z": 1.3,
+    "tableFront.lift": 0.4,
+    "tableBack.z": -0.95,
+    "tableBack.lift": 1.2,
+    "micRig1.x": 0.0,
+    "micRig1.z": 1.7,
+    "micRig1.h": 1.48,
+    "micRig2.x": 1.1,
+    "micRig2.z": -0.35,
+    "micRig2.h": 1.5
+  },
+  "overlays": {
+    "points": [
+      {
+        "id": "dut",
+        "label": "DUT (top edge of the display)",
+        "on": "screen",
+        "offset": [
+          0.0,
+          0.407,
+          0.0
+        ],
+        "style": "dut"
+      },
+      {
+        "id": "t2p1",
+        "label": "Talker 2 Pos1 (manual, approximate)",
+        "on": "screen",
+        "offset": [
+          -0.513,
+          0.0,
+          -1.4095
+        ],
+        "style": "ghost"
+      },
+      {
+        "id": "t2p2",
+        "label": "Talker 2 Pos2 (manual, approximate)",
+        "on": "screen",
+        "offset": [
+          1.0607,
+          0.0,
+          -1.0607
+        ],
+        "style": "ghost"
+      }
+    ],
+    "circles": [
+      {
+        "id": "talker",
+        "at": "dut",
+        "offset": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "radii": [
+          1.0,
+          1.5
+        ],
+        "span": "half",
+        "level": "mouth",
+        "label": "Talker 1 (1 m) / Talker 2 (1.5 m)"
+      }
+    ],
+    "distances": [
+      {
+        "from": "hats",
+        "to": "dut"
+      }
+    ]
+  }
+}

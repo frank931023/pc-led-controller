@@ -54,7 +54,8 @@ class Probe:
 
 
 # Fields of /api/status worth keeping for the UI and for timeout decisions.
-INFO_FIELDS = ('app_version', 'board', 'command_timeout', 'max_command_timeout', 'rig_name', 'running', 'arduino_error')
+INFO_FIELDS = ('app_version', 'board', 'command_timeout', 'max_command_timeout', 'rig_name', 'running',
+               'arduino_error', 'arduino_session')
 
 
 def _url(device, endpoint):

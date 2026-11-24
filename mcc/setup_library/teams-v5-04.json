@@ -1,0 +1,47 @@
+{
+  "id": "teams-v5-04",
+  "name": "T5-04-ANY-DESKPHONE-HEADSET",
+  "description": "同 Headset 擺法(§2.4)。沒附耳機的話用 Teams 認證耳機。軸值與 #2 相同。\n[換算] 嘴 z=0.15 高 1.20\n[人工] 耳機配戴同 #1\n[規範] Teams Audio Spec V5 §3.4.2 p.55 -> §2.4",
+  "group": "MS Teams V5",
+  "created": "2026-11-21T16:40:51.574",
+  "updated": "2026-11-21T16:40:51.574",
+  "source": "library",
+  "axes": {
+    "speakers.x": 0.0,
+    "speakers.lift": 1.3,
+    "screen.z": 2.35,
+    "screen.lift": 1.25,
+    "hats.z": 0.0,
+    "hats.x": 0.0,
+    "hats.mrp": 1.2,
+    "hats.rot": 0.0,
+    "hats.head": 0.0,
+    "tableFront.z": 1.8,
+    "tableFront.lift": 0.4,
+    "tableBack.z": -0.95,
+    "tableBack.lift": 1.2,
+    "micRig1.x": 0.06,
+    "micRig1.z": 0.17,
+    "micRig1.h": 1.2,
+    "micRig2.x": 1.1,
+    "micRig2.z": -0.35,
+    "micRig2.h": 1.5
+  },
+  "overlays": {
+    "points": [
+      {
+        "id": "dut",
+        "label": "Headset worn on HATS",
+        "on": "hats",
+        "offset": [
+          0.0,
+          0.12,
+          0.0
+        ],
+        "style": "dut"
+      }
+    ],
+    "circles": [],
+    "distances": []
+  }
+}

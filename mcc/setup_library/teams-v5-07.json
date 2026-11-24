@@ -1,0 +1,74 @@
+{
+  "id": "teams-v5-07",
+  "name": "T5-07-AR-PERSONAL-SPK",
+  "description": "嘴高出桌面 30 cm、到 dummy 螢幕 1.00 m;螢幕放桌面中心。webcam / USB 麥克風 / 螢幕內建 AV 三種形態共用這組軸值。\n[換算] 嘴 z=0.15 高 1.25;桌面中心 z=1.15 高 0.95\n[人工] 桌上放 24\"~27\" dummy 螢幕(房間的大螢幕是 55\",不符規範) / webcam:夾螢幕上方,比嘴高最多 20 cm;旁邊放 Logitech Z150 一對 / USB 麥克風:放螢幕前 25 cm;搭 Z150\n[規範] Teams Audio Spec V5 §4.4.1 Fig.33-36 p.70-72",
+  "group": "MS Teams V5",
+  "created": "2026-11-21T16:40:51.574",
+  "updated": "2026-11-21T16:40:51.574",
+  "source": "library",
+  "axes": {
+    "speakers.x": 0.0,
+    "speakers.lift": 1.3,
+    "screen.z": 2.35,
+    "screen.lift": 1.25,
+    "hats.z": 0.0,
+    "hats.x": 0.0,
+    "hats.mrp": 1.25,
+    "hats.rot": 0.0,
+    "hats.head": 0.0,
+    "tableFront.z": 1.15,
+    "tableFront.lift": 0.9,
+    "tableBack.z": -0.95,
+    "tableBack.lift": 1.2,
+    "micRig1.x": -1.1,
+    "micRig1.z": 0.55,
+    "micRig1.h": 1.5,
+    "micRig2.x": 1.1,
+    "micRig2.z": -0.35,
+    "micRig2.h": 1.5
+  },
+  "overlays": {
+    "points": [
+      {
+        "id": "dut",
+        "label": "Webcam (top of dummy monitor)",
+        "on": "tableFront",
+        "offset": [
+          0.0,
+          0.45,
+          0.0
+        ],
+        "style": "dut"
+      },
+      {
+        "id": "monitor",
+        "label": "24\" dummy monitor (manual)",
+        "on": "tableFront",
+        "offset": [
+          0.0,
+          0.26,
+          0.02
+        ],
+        "style": "ghost"
+      },
+      {
+        "id": "z150",
+        "label": "Logitech Z150 ×2 (manual)",
+        "on": "tableFront",
+        "offset": [
+          0.34,
+          0.075,
+          0.02
+        ],
+        "style": "ghost"
+      }
+    ],
+    "circles": [],
+    "distances": [
+      {
+        "from": "hats",
+        "to": "dut"
+      }
+    ]
+  }
+}
